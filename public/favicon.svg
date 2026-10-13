@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <style>
+    path {
+      fill: #18181b;
+    }
+    @media (prefers-color-scheme: dark) {
+      path {
+        fill: #f4f4f5;
+      }
+    }
+  </style>
+  <!-- Arka plansız Matematiksel Toplam Sembolü (Sigma Σ) -->
+  <path d="M 52 10 L 12 10 L 32 32 L 12 54 L 52 54 L 52 46 L 24 46 L 37 32 L 24 18 L 52 18 Z" />
+</svg>
