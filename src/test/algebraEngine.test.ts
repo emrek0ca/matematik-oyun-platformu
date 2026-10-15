@@ -213,3 +213,25 @@ describe('Algebra Engine - Recommended Operations & Stages', () => {
     expect(s4.isolatedValue).toBe(3);
   });
 });
+
+import { decomposeConstantToWeights } from '../components/BalanceScale3D';
+
+describe('BalanceScale3D - Weight Decomposition', () => {
+  it('should decompose 4 into weights summing to 4', () => {
+    const weights = decomposeConstantToWeights(4, 'left');
+    const sum = weights.reduce((acc, w) => acc + w.value, 0);
+    expect(sum).toBe(4);
+    expect(weights.every(w => w.type === 'constant')).toBe(true);
+  });
+
+  it('should decompose 7 into weights summing to 7', () => {
+    const weights = decomposeConstantToWeights(7, 'right');
+    const sum = weights.reduce((acc, w) => acc + w.value, 0);
+    expect(sum).toBe(7);
+  });
+
+  it('should handle zero or negative constants gracefully', () => {
+    expect(decomposeConstantToWeights(0, 'left')).toEqual([]);
+    expect(decomposeConstantToWeights(-3, 'right')).toEqual([]);
+  });
+});
