@@ -214,7 +214,7 @@ describe('Algebra Engine - Recommended Operations & Stages', () => {
   });
 });
 
-import { decomposeConstantToWeights } from '../components/BalanceScale3D';
+import { decomposeConstantToWeights, layoutPanItems, PanItem } from '../components/BalanceScale3D';
 
 describe('BalanceScale3D - Weight Decomposition', () => {
   it('should decompose 4 into weights summing to 4', () => {
@@ -233,5 +233,47 @@ describe('BalanceScale3D - Weight Decomposition', () => {
   it('should handle zero or negative constants gracefully', () => {
     expect(decomposeConstantToWeights(0, 'left')).toEqual([]);
     expect(decomposeConstantToWeights(-3, 'right')).toEqual([]);
+  });
+});
+
+describe('BalanceScale3D - Spacious Pan Layout (layoutPanItems)', () => {
+  it('should place x items and constant items with safe spacing without overlap', () => {
+    const items: PanItem[] = [
+      { id: 'lx1', type: 'x', value: 1, label: 'x' },
+      { id: 'lx2', type: 'x', value: 1, label: 'x' },
+      { id: 'lc1', type: 'constant', value: 2, label: '2' },
+      { id: 'lc2', type: 'constant', value: 2, label: '2' },
+    ];
+    const placed = layoutPanItems(items);
+    expect(placed.length).toBe(4);
+
+    // Verify all positions are inside the 2.4-radius pan dish
+    for (const p of placed) {
+      const distFromCenter = Math.sqrt(p.pos[0] * p.pos[0] + p.pos[2] * p.pos[2]);
+      expect(distFromCenter).toBeLessThan(2.3);
+    }
+
+    // Verify distance between all pairs is at least 0.65 units
+    for (let i = 0; i < placed.length; i++) {
+      for (let j = i + 1; j < placed.length; j++) {
+        const dx = placed[i].pos[0] - placed[j].pos[0];
+        const dz = placed[i].pos[2] - placed[j].pos[2];
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        expect(dist).toBeGreaterThanOrEqual(0.65);
+      }
+    }
+  });
+
+  it('should separate x crates to negative X and constant weights to positive X', () => {
+    const items: PanItem[] = [
+      { id: 'x1', type: 'x', value: 1, label: 'x' },
+      { id: 'c1', type: 'constant', value: 5, label: '5' },
+    ];
+    const placed = layoutPanItems(items);
+    const xPos = placed.find(p => p.item.type === 'x')!;
+    const cPos = placed.find(p => p.item.type === 'constant')!;
+
+    expect(xPos.pos[0]).toBeLessThan(0); // Left half
+    expect(cPos.pos[0]).toBeGreaterThan(0); // Right half
   });
 });

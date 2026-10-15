@@ -201,11 +201,7 @@ export default function AlgebraGame() {
   const [isTilting, setIsTilting] = useState(false);
   const [tiltStatus, setTiltStatus] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'3d' | '2d'>('3d');
-  const [pendingRemoval, setPendingRemoval] = useState<{
-    side: 'left' | 'right';
-    type: 'x' | 'constant';
-    value: number;
-  } | null>(null);
+  const [opMode, setOpMode] = useState<'balanced' | 'free'>('balanced');
   const [floatingTokens, setFloatingTokens] = useState<
     Array<{
       id: number;
@@ -250,7 +246,6 @@ export default function AlgebraGame() {
     setTiltAngle(0);
     setIsTilting(false);
     setTiltStatus(null);
-    setPendingRemoval(null);
     setFloatingTokens([]);
     if (tiltTimerRef.current) clearTimeout(tiltTimerRef.current);
     if (tiltSecondTimerRef.current) clearTimeout(tiltSecondTimerRef.current);
@@ -322,27 +317,8 @@ export default function AlgebraGame() {
     return items;
   }, [gameState.currentEq.rightA, gameState.currentEq.rightB]);
 
-  const activeLeftItems = useMemo<PanItem[]>(() => {
-    if (!pendingRemoval || pendingRemoval.side !== 'left') return baseLeftItems;
-    const idx = baseLeftItems.findIndex(
-      it => it.type === pendingRemoval.type && it.value === pendingRemoval.value
-    );
-    if (idx >= 0) {
-      return [...baseLeftItems.slice(0, idx), ...baseLeftItems.slice(idx + 1)];
-    }
-    return baseLeftItems;
-  }, [baseLeftItems, pendingRemoval]);
-
-  const activeRightItems = useMemo<PanItem[]>(() => {
-    if (!pendingRemoval || pendingRemoval.side !== 'right') return baseRightItems;
-    const idx = baseRightItems.findIndex(
-      it => it.type === pendingRemoval.type && it.value === pendingRemoval.value
-    );
-    if (idx >= 0) {
-      return [...baseRightItems.slice(0, idx), ...baseRightItems.slice(idx + 1)];
-    }
-    return baseRightItems;
-  }, [baseRightItems, pendingRemoval]);
+  const activeLeftItems = baseLeftItems;
+  const activeRightItems = baseRightItems;
 
   const currentLeftMass = useMemo(() => {
     return activeLeftItems.reduce(
@@ -377,7 +353,6 @@ export default function AlgebraGame() {
     triggerSide: 'left' | 'right' = 'left'
   ) {
     if (gameState.solved || (gameMode === 'rush' && isRushGameOver) || isTilting) return;
-    setPendingRemoval(null);
 
     const result = applyOperation(gameState.currentEq, {
       type,
@@ -526,88 +501,165 @@ export default function AlgebraGame() {
   const leftStr = formatSide(gameState.currentEq.leftA, gameState.currentEq.leftB);
   const rightStr = formatSide(gameState.currentEq.rightA, gameState.currentEq.rightB);
 
-  // 3B Kefeden Doğrudan Sayı / x Alma (Eksiltme) Eylemleri
-  const handle3DItemClick = (side: 'left' | 'right', item: PanItem) => {
+  // Kefeden Nesne Alma (Kaldırma / Eksiltme)
+  const handleRemoveItem = (side: 'left' | 'right', type: 'x' | 'constant', value: number) => {
     if (gameState.solved || (gameMode === 'rush' && isRushGameOver) || isTilting) return;
 
-    // Durum 1: Henüz bekleyen asimetrik işlem yoksa, bu nesneyi doğrudan kefeden al!
-    if (!pendingRemoval) {
-      setPendingRemoval({ side, type: item.type, value: item.value });
-      playSound('move');
-      addFloatingToken(
-        side,
-        `−${item.type === 'x' ? (item.value === 1 ? 'x' : `${item.value}x`) : item.value}`,
-        'subtract'
-      );
-
-      const itemLabel = item.type === 'x' ? (item.value === 1 ? '1x' : `${item.value}x`) : `${item.value}`;
-      setFeedback({
-        type: 'hint',
-        message: `⚠️ ${side === 'left' ? 'Sol' : 'Sağ'} kefeden ${itemLabel} eksiltildi! Terazi dengesi bozuldu (${side === 'left' ? 'Sağ' : 'Sol'} kefe ağır bastı ve aşağı indi). Şimdi dengeyi sağlamak için diğer kefeden de aynı miktarı eksilt!`,
-      });
-      return;
-    }
-
-    // Durum 2: Karşı kefeye tıklandıysa
-    if (pendingRemoval.side !== side) {
-      if (pendingRemoval.type === item.type && (item.type === 'x' || pendingRemoval.value === item.value)) {
-        const valToSub = pendingRemoval.value;
-        const isVar = pendingRemoval.type === 'x';
-        setPendingRemoval(null);
-        handleOperation('subtract', valToSub, isVar, side);
+    if (opMode === 'balanced') {
+      // ⚡ Akıllı Denge Modu: Cebirsel denklik korunarak her iki kefeden eşit miktarda eksiltilir
+      if (type === 'x') {
+        const canSubtract = gameState.currentEq.leftA >= 1 && gameState.currentEq.rightA >= 1;
+        if (canSubtract) {
+          handleOperation('subtract', 1, true, side);
+        } else {
+          playSound('wrong');
+          setFeedback({
+            type: 'info',
+            message: `Karşı kefede x kutusu kalmadığı için x çıkarılamaz. Hedef x'i yalnız bırakmak!`,
+          });
+        }
       } else {
-        playSound('wrong');
-        const expected = pendingRemoval.type === 'x' ? '1x' : `${pendingRemoval.value}`;
+        // Sabit sayı eksiltme
+        const currentThisB = side === 'left' ? gameState.currentEq.leftB : gameState.currentEq.rightB;
+        const currentOtherB = side === 'left' ? gameState.currentEq.rightB : gameState.currentEq.leftB;
+
+        if (currentOtherB <= 0) {
+          playSound('wrong');
+          setFeedback({
+            type: 'info',
+            message: `Karşı kefede pozitif sayı kalmadığı için çıkarma yapılamaz. Hedef x'i yalnız bırakmak!`,
+          });
+          return;
+        }
+
+        const subVal = Math.min(value, currentOtherB, currentThisB);
+        if (subVal > 0) {
+          handleOperation('subtract', subVal, false, side);
+        }
+      }
+    } else {
+      // 🖐️ Serbest Kefe Modu: Sadece tıklanan kefeden eksiltilir, terazi hemen gerçek fiziksel ağırlık farkına göre eğilir!
+      const isLeft = side === 'left';
+      let nextLeftA = gameState.currentEq.leftA;
+      let nextLeftB = gameState.currentEq.leftB;
+      let nextRightA = gameState.currentEq.rightA;
+      let nextRightB = gameState.currentEq.rightB;
+
+      if (type === 'x') {
+        if (isLeft) nextLeftA = Math.max(0, nextLeftA - 1);
+        else nextRightA = Math.max(0, nextRightA - 1);
+      } else {
+        if (isLeft) nextLeftB = Math.max(0, nextLeftB - value);
+        else nextRightB = Math.max(0, nextRightB - value);
+      }
+
+      const nextEq: Equation = {
+        leftA: nextLeftA,
+        leftB: nextLeftB,
+        rightA: nextRightA,
+        rightB: nextRightB,
+      };
+
+      playSound('move');
+      addFloatingToken(side, `−${type === 'x' ? '1x' : value}`, 'subtract');
+
+      setGameState(prev => ({
+        ...prev,
+        currentEq: nextEq,
+        steps: [...prev.steps, `[Serbest] ${side === 'left' ? 'Sol' : 'Sağ'} kefeden −${type === 'x' ? '1x' : value}`],
+      }));
+
+      // Serbest modda denge kontrolü
+      const newLeftMass = nextLeftA * effectiveXWeight + nextLeftB;
+      const newRightMass = nextRightA * effectiveXWeight + nextRightB;
+      if (newLeftMass === newRightMass) {
+        playSound('win');
         setFeedback({
-          type: 'error',
-          message: `Denge kuralı: Terazi eşitliği için karşı kefeden de tam olarak ${expected} çıkarmalısın!`,
+          type: 'success',
+          message: `🎉 Tebrikler! Kefeleri tam olarak eşitledin (${newLeftMass} br = ${newRightMass} br). Terazi tam dengede!`,
+        });
+      } else {
+        const heavier = newLeftMass > newRightMass ? 'Sol kefe ağır bastı ↘' : 'Sağ kefe ağır bastı ↘';
+        setFeedback({
+          type: 'info',
+          message: `Kefeden ${type === 'x' ? '1x' : value} eksiltildi. ${heavier}`,
         });
       }
-    } else {
-      // Aynı kefeye tıklandıysa yerine geri koy
-      setPendingRemoval(null);
-      playSound('click');
-      setFeedback({
-        type: 'info',
-        message: 'Eksiltilen nesne kefeye geri konuldu, terazi dengesi korundu.',
-      });
     }
   };
 
-  const handleCompleteCounterRemoval = () => {
-    if (!pendingRemoval) return;
-    const { side, type, value } = pendingRemoval;
-    const otherSide = side === 'left' ? 'right' : 'left';
-    setPendingRemoval(null);
-    handleOperation('subtract', value, type === 'x', otherSide);
+  // Kefeye Yeni Ağırlık / x Koyma (Ekleme)
+  const handleAddItem = (side: 'left' | 'right', type: 'x' | 'constant', value: number) => {
+    if (gameState.solved || (gameMode === 'rush' && isRushGameOver) || isTilting) return;
+
+    if (opMode === 'balanced') {
+      // ⚡ Akıllı Denge Modu: Her iki tarafa da ekler ve teraziyi önce eğip sonra dengeler
+      handleOperation('add', value, type === 'x', side);
+    } else {
+      // 🖐️ Serbest Kefe Modu: Sadece seçilen kefeye ekler, terazi anında o kefeye doğru çöker!
+      const isLeft = side === 'left';
+      let nextLeftA = gameState.currentEq.leftA;
+      let nextLeftB = gameState.currentEq.leftB;
+      let nextRightA = gameState.currentEq.rightA;
+      let nextRightB = gameState.currentEq.rightB;
+
+      if (type === 'x') {
+        if (isLeft) nextLeftA += 1;
+        else nextRightA += 1;
+      } else {
+        if (isLeft) nextLeftB += value;
+        else nextRightB += value;
+      }
+
+      const nextEq: Equation = {
+        leftA: nextLeftA,
+        leftB: nextLeftB,
+        rightA: nextRightA,
+        rightB: nextRightB,
+      };
+
+      playSound('move');
+      addFloatingToken(side, `+${type === 'x' ? '1x' : value}`, 'add');
+
+      setGameState(prev => ({
+        ...prev,
+        currentEq: nextEq,
+        steps: [...prev.steps, `[Serbest] ${side === 'left' ? 'Sol' : 'Sağ'} kefeye +${type === 'x' ? '1x' : value}`],
+      }));
+
+      // Serbest modda denge kontrolü
+      const newLeftMass = nextLeftA * effectiveXWeight + nextLeftB;
+      const newRightMass = nextRightA * effectiveXWeight + nextRightB;
+      if (newLeftMass === newRightMass) {
+        playSound('win');
+        setFeedback({
+          type: 'success',
+          message: `🎉 Harika! Kefeler tam eşitlendi (${newLeftMass} br = ${newRightMass} br). Terazi tam dengede!`,
+        });
+      } else {
+        const heavier = newLeftMass > newRightMass ? 'Sol kefe ağır bastı ↘' : 'Sağ kefe ağır bastı ↘';
+        setFeedback({
+          type: 'info',
+          message: `${side === 'left' ? 'Sol' : 'Sağ'} kefeye ${type === 'x' ? '1x' : value} eklendi. ${heavier}`,
+        });
+      }
+    }
   };
 
-  const handleCancelRemoval = () => {
-    setPendingRemoval(null);
-    playSound('click');
-    setFeedback({
-      type: 'info',
-      message: 'İşlem iptal edildi. Nesne kefeye geri bırakıldı.',
-    });
+  // 3B Kefeden Tıklayarak Nesne Alma (Eksiltme)
+  const handle3DItemClick = (side: 'left' | 'right', item: PanItem) => {
+    handleRemoveItem(side, item.type, item.value);
   };
 
-  // Kefe üzerindeki nesnelere doğrudan tıklama eylemleri (2B Mod İçin)
+  // 2B Mod veya Kefe Tıklaması
   const handlePanItemClick = (type: 'x' | 'constant', side: 'left' | 'right') => {
     if (gameState.solved || isTilting) return;
-
     if (type === 'x') {
-      // Tıklanan kefeden başlayarak her iki kefeden 1x çıkar
-      const count = side === 'left' ? gameState.currentEq.leftA : gameState.currentEq.rightA;
-      if (count > 0) {
-        handleOperation('subtract', 1, true, side);
-      }
+      handleRemoveItem(side, 'x', 1);
     } else {
-      // Sabit sayıya tıklandı
       const constVal = side === 'left' ? gameState.currentEq.leftB : gameState.currentEq.rightB;
       if (constVal > 0) {
-        handleOperation('subtract', constVal, false, side);
-      } else if (constVal < 0) {
-        handleOperation('add', Math.abs(constVal), false, side);
+        handleRemoveItem(side, 'constant', Math.min(2, constVal));
       }
     }
   };
@@ -835,43 +887,43 @@ export default function AlgebraGame() {
             <motion.div
               layout
               className={`px-3 py-1 rounded-lg border-2 text-xs font-bold font-mono transition-all flex items-center gap-1.5 ${
-                pendingRemoval || isTilting
+                isTilting
                   ? 'border-amber-600 bg-amber-50 text-amber-900 shadow-[2px_2px_0px_#d97706] animate-pulse'
                   : currentLeftMass === currentRightMass
                   ? 'border-emerald-600 bg-emerald-50 text-emerald-800 shadow-[2px_2px_0px_#059669]'
                   : 'border-rose-600 bg-rose-50 text-rose-800 shadow-[2px_2px_0px_#e11d48]'
               }`}
             >
-              {pendingRemoval ? (
-                <span>
-                  ≠ DENGESİZ ({pendingRemoval.side === 'left' ? 'Sağ' : 'Sol'} Kefe Ağır Bastı!)
-                </span>
-              ) : isTilting && tiltStatus ? (
+              {isTilting && tiltStatus ? (
                 <span>⚡ {tiltStatus}</span>
               ) : currentLeftMass === currentRightMass ? (
-                <span>✓ KEFELER DENGEDE</span>
+                <span>✓ KEFELER DENGEDE ({currentLeftMass} br)</span>
               ) : (
-                <span>≠ DENGESİZ</span>
+                <span>
+                  ≠ {currentLeftMass > currentRightMass ? 'SOL KEFE AĞIR (↘)' : 'SAĞ KEFE AĞIR (↘)'} ({Math.abs(currentLeftMass - currentRightMass)} br fark)
+                </span>
               )}
             </motion.div>
           </div>
 
-          {/* Bekleyen Asimetrik Eksiltme Uyarısı ve Dengeleme Çubuğu */}
-          {pendingRemoval && (
+          {/* Serbest Kefe Modu Bilgi ve Dengeleme Çubuğu */}
+          {opMode === 'free' && (
             <motion.div
-              initial={{ opacity: 0, y: -8 }}
+              initial={{ opacity: 0, y: -6 }}
               animate={{ opacity: 1, y: 0 }}
-              className="mb-3 p-3 rounded-xl border-2 border-amber-600 bg-amber-50/95 shadow-[3px_3px_0px_#d97706] flex items-center justify-between flex-wrap gap-2"
+              className={`mb-3 p-3 rounded-xl border-2 flex items-center justify-between flex-wrap gap-2 text-xs ${
+                currentLeftMass === currentRightMass
+                  ? 'border-emerald-600 bg-emerald-50/95 text-emerald-950 shadow-[2px_2px_0px_#059669]'
+                  : 'border-amber-600 bg-amber-50/95 text-amber-950 shadow-[2px_2px_0px_#d97706]'
+              }`}
             >
               <div className="flex items-center gap-2">
-                <span className="text-xl">⚠️</span>
-                <div className="text-xs">
-                  <div className="font-bold text-amber-950 font-mono">
-                    {pendingRemoval.side === 'left' ? 'Sol' : 'Sağ'} kefeden{' '}
-                    {pendingRemoval.type === 'x' ? '1x' : pendingRemoval.value} eksiltildi!
-                  </div>
-                  <div className="text-[11px] text-amber-800">
-                    Ağır basan kefe aşağı indi. Dengeyi sağlamak için karşı kefeden de aynı miktarı eksilt!
+                <span className="text-xl">{currentLeftMass === currentRightMass ? '🎉' : '🖐️'}</span>
+                <div>
+                  <div className="font-bold font-mono">
+                    {currentLeftMass === currentRightMass
+                      ? 'Harika! Terazi Tam Dengede! (Sol: ' + currentLeftMass + ' br = Sağ: ' + currentRightMass + ' br)'
+                      : 'Serbest Kefe Modu: Ağır basan taraf aşağı çöktü! Dengelemek için hafif tarafa ağırlık ekle veya ağır taraftan eksilt.'}
                   </div>
                 </div>
               </div>
@@ -879,17 +931,18 @@ export default function AlgebraGame() {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleCompleteCounterRemoval}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-mono text-xs font-bold border border-emerald-800 shadow transition-all active:scale-95 flex items-center gap-1.5"
+                  onClick={() => {
+                    setGameState(prev => ({
+                      ...prev,
+                      currentEq: prev.equation,
+                      steps: [equationToString(prev.equation)],
+                    }));
+                    playSound('click');
+                    setFeedback({ type: 'info', message: 'Denklem başlangıç durumuna sıfırlandı.' });
+                  }}
+                  className="px-3 py-1 rounded-lg bg-white hover:bg-zinc-100 text-zinc-800 font-mono text-xs font-bold border border-zinc-900 shadow transition-all active:scale-95"
                 >
-                  <span>⚡</span> Karşı Kefeden de Eksilt & Dengele
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCancelRemoval}
-                  className="px-3 py-1.5 rounded-lg bg-white hover:bg-zinc-100 text-zinc-800 font-mono text-xs font-bold border border-zinc-900 shadow transition-all active:scale-95"
-                >
-                  ↩️ Geri Koy
+                  🔄 Başlangıca Dön
                 </button>
               </div>
             </motion.div>
@@ -1088,83 +1141,200 @@ export default function AlgebraGame() {
             </div>
           )}
 
-          {/* KEFELERDEKİ NESNELER & TEK TIKLA EKSİLTME TEPSİLERİ */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
-            {/* Sol Kefe Nesne Tepsisi */}
-            <div className="p-3 rounded-xl border-2 border-zinc-900 bg-white shadow-[2px_2px_0px_#18181b]">
-              <div className="flex items-center justify-between mb-2">
+          {/* KEFE ÇALIŞMA MODU VE KONTROL ŞERİDİ */}
+          <div className="flex items-center justify-between flex-wrap gap-2 mt-4 pt-3 border-t-2 border-zinc-200">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold font-mono text-zinc-700">KEFE MODU:</span>
+              <div className="flex p-0.5 rounded-lg border-2 border-zinc-900 bg-zinc-100 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setOpMode('balanced')}
+                  className={`px-3 py-1 rounded-md text-xs font-bold font-mono transition-all ${
+                    opMode === 'balanced'
+                      ? 'bg-zinc-900 text-white shadow-sm'
+                      : 'text-zinc-700 hover:text-zinc-900'
+                  }`}
+                  title="Bir kefeden alıp koyduğunda terazi cebirsel dengeyi korur"
+                >
+                  ⚡ Otomatik Denge (Cebir)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOpMode('free')}
+                  className={`px-3 py-1 rounded-md text-xs font-bold font-mono transition-all ${
+                    opMode === 'free'
+                      ? 'bg-amber-500 text-zinc-950 font-black shadow-sm'
+                      : 'text-zinc-700 hover:text-zinc-900'
+                  }`}
+                  title="Kefelere serbestçe ağırlık ekleyip çıkarabilirsin, terazi gerçek ağırlığa göre eğilir"
+                >
+                  🖐️ Serbest Kefe (Fizik)
+                </button>
+              </div>
+            </div>
+
+            <span className="text-[11px] text-zinc-500 font-medium">
+              {opMode === 'balanced'
+                ? '💡 Otomatik Denge: Tıkladığın nesne iki kefeden de eşitlenir.'
+                : '⚖️ Serbest Kefe: Ağır basan taraf aşağı çöker. Kefeleri dengelemeye çalış!'}
+            </span>
+          </div>
+
+          {/* KEFELERDEKİ NESNELER: ALMA (EKSİLTME) & KOYMA (EKLEME) KONTROL MASASI */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+            {/* Sol Kefe Kontrol Masası */}
+            <div className="p-3.5 rounded-xl border-2 border-zinc-900 bg-white shadow-[2px_2px_0px_#18181b] space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-zinc-200">
                 <div className="flex items-center gap-2">
-                  <span className="w-3 h-3 rounded-full bg-blue-600 border border-zinc-900 shadow-sm inline-block"></span>
+                  <span className="w-3.5 h-3.5 rounded-full bg-blue-600 border border-zinc-900 shadow-sm inline-block"></span>
                   <span className="text-xs font-bold font-mono text-zinc-900">
-                    Sol Kefe: {leftStr}
+                    Sol Kefe: <span className="text-blue-700 font-extrabold">{leftStr}</span>
                   </span>
                 </div>
-                <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded border border-zinc-300 bg-zinc-100 text-zinc-700">
+                <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded border border-zinc-300 bg-zinc-50 text-zinc-800">
                   Ağırlık: {currentLeftMass} br
                 </span>
               </div>
 
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[11px] text-zinc-500 font-bold mr-1">Kefeden Al:</span>
-                {activeLeftItems.length === 0 ? (
-                  <span className="text-[11px] text-zinc-400 font-mono">Boş (0)</span>
-                ) : (
-                  activeLeftItems.map(item => (
+              {/* 🗑️ Kefeden Al (Eksilt) */}
+              <div>
+                <div className="text-[11px] text-zinc-600 font-bold mb-1.5 flex items-center justify-between">
+                  <span>🗑️ Kefeden Al (Kaldır):</span>
+                  <span className="text-[10px] text-zinc-400 font-normal">3B modelden de tıklayabilirsin</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 min-h-[32px]">
+                  {activeLeftItems.length === 0 ? (
+                    <span className="text-xs text-zinc-400 font-mono italic">Kefe boş (0)</span>
+                  ) : (
+                    activeLeftItems.map(item => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => handleRemoveItem('left', item.type, item.value)}
+                        disabled={gameState.solved || isTilting}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px] hover:scale-105 ${
+                          item.type === 'x'
+                            ? 'bg-blue-600 text-white hover:bg-blue-700'
+                            : 'bg-amber-400 text-zinc-900 hover:bg-amber-300'
+                        }`}
+                        title={`${item.label} nesnesini sol kefeden kaldır`}
+                      >
+                        {item.type === 'x' ? '📦 −1x' : `⚖️ −${item.value}`}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* ➕ Kefeye Koy (Ağırlık Ekle) */}
+              <div className="pt-2 border-t border-dashed border-zinc-200">
+                <div className="text-[11px] text-zinc-600 font-bold mb-1.5 flex items-center justify-between">
+                  <span>➕ Kefeye Koy (Ağırlık Ekle):</span>
+                  <span className="text-[10px] text-emerald-700 font-medium font-mono">
+                    {opMode === 'balanced' ? 'Her iki kefeye' : 'Sadece sol kefeye'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleAddItem('left', 'x', 1)}
+                    disabled={gameState.solved || isTilting}
+                    className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 bg-blue-100 hover:bg-blue-200 text-blue-900 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px]"
+                    title="Sol kefeye 1x sandığı koy"
+                  >
+                    📦 +1x
+                  </button>
+                  {[1, 2, 5].map(v => (
                     <button
-                      key={item.id}
+                      key={v}
                       type="button"
-                      onClick={() => handle3DItemClick('left', item)}
+                      onClick={() => handleAddItem('left', 'constant', v)}
                       disabled={gameState.solved || isTilting}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px] hover:scale-105 ${
-                        item.type === 'x'
-                          ? 'bg-blue-600 text-white hover:bg-blue-700'
-                          : 'bg-amber-400 text-zinc-900 hover:bg-amber-300'
-                      }`}
-                      title={`${item.label} nesnesini sol kefeden eksilt`}
+                      className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 bg-amber-100 hover:bg-amber-200 text-amber-950 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px]"
+                      title={`Sol kefeye +${v} pirinç ağırlık koy`}
                     >
-                      {item.type === 'x' ? '📦 −1x' : `⚖️ −${item.value}`}
+                      ⚖️ +{v}
                     </button>
-                  ))
-                )}
+                  ))}
+                </div>
               </div>
             </div>
 
-            {/* Sağ Kefe Nesne Tepsisi */}
-            <div className="p-3 rounded-xl border-2 border-zinc-900 bg-white shadow-[2px_2px_0px_#18181b]">
-              <div className="flex items-center justify-between mb-2">
+            {/* Sağ Kefe Kontrol Masası */}
+            <div className="p-3.5 rounded-xl border-2 border-zinc-900 bg-white shadow-[2px_2px_0px_#18181b] space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-zinc-200">
                 <div className="flex items-center gap-2">
-                  <span className="w-3 h-3 rounded-full bg-amber-500 border border-zinc-900 shadow-sm inline-block"></span>
+                  <span className="w-3.5 h-3.5 rounded-full bg-amber-500 border border-zinc-900 shadow-sm inline-block"></span>
                   <span className="text-xs font-bold font-mono text-zinc-900">
-                    Sağ Kefe: {rightStr}
+                    Sağ Kefe: <span className="text-amber-800 font-extrabold">{rightStr}</span>
                   </span>
                 </div>
-                <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded border border-zinc-300 bg-zinc-100 text-zinc-700">
+                <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded border border-zinc-300 bg-zinc-50 text-zinc-800">
                   Ağırlık: {currentRightMass} br
                 </span>
               </div>
 
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[11px] text-zinc-500 font-bold mr-1">Kefeden Al:</span>
-                {activeRightItems.length === 0 ? (
-                  <span className="text-[11px] text-zinc-400 font-mono">Boş (0)</span>
-                ) : (
-                  activeRightItems.map(item => (
+              {/* 🗑️ Kefeden Al (Eksilt) */}
+              <div>
+                <div className="text-[11px] text-zinc-600 font-bold mb-1.5 flex items-center justify-between">
+                  <span>🗑️ Kefeden Al (Kaldır):</span>
+                  <span className="text-[10px] text-zinc-400 font-normal">3B modelden de tıklayabilirsin</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5 min-h-[32px]">
+                  {activeRightItems.length === 0 ? (
+                    <span className="text-xs text-zinc-400 font-mono italic">Kefe boş (0)</span>
+                  ) : (
+                    activeRightItems.map(item => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => handleRemoveItem('right', item.type, item.value)}
+                        disabled={gameState.solved || isTilting}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px] hover:scale-105 ${
+                          item.type === 'x'
+                            ? 'bg-blue-600 text-white hover:bg-blue-700'
+                            : 'bg-amber-400 text-zinc-900 hover:bg-amber-300'
+                        }`}
+                        title={`${item.label} nesnesini sağ kefeden kaldır`}
+                      >
+                        {item.type === 'x' ? '📦 −1x' : `⚖️ −${item.value}`}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* ➕ Kefeye Koy (Ağırlık Ekle) */}
+              <div className="pt-2 border-t border-dashed border-zinc-200">
+                <div className="text-[11px] text-zinc-600 font-bold mb-1.5 flex items-center justify-between">
+                  <span>➕ Kefeye Koy (Ağırlık Ekle):</span>
+                  <span className="text-[10px] text-emerald-700 font-medium font-mono">
+                    {opMode === 'balanced' ? 'Her iki kefeye' : 'Sadece sağ kefeye'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleAddItem('right', 'x', 1)}
+                    disabled={gameState.solved || isTilting}
+                    className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 bg-blue-100 hover:bg-blue-200 text-blue-900 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px]"
+                    title="Sağ kefeye 1x sandığı koy"
+                  >
+                    📦 +1x
+                  </button>
+                  {[1, 2, 5].map(v => (
                     <button
-                      key={item.id}
+                      key={v}
                       type="button"
-                      onClick={() => handle3DItemClick('right', item)}
+                      onClick={() => handleAddItem('right', 'constant', v)}
                       disabled={gameState.solved || isTilting}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px] hover:scale-105 ${
-                        item.type === 'x'
-                          ? 'bg-blue-600 text-white hover:bg-blue-700'
-                          : 'bg-amber-400 text-zinc-900 hover:bg-amber-300'
-                      }`}
-                      title={`${item.label} nesnesini sağ kefeden eksilt`}
+                      className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 bg-amber-100 hover:bg-amber-200 text-amber-950 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px]"
+                      title={`Sağ kefeye +${v} pirinç ağırlık koy`}
                     >
-                      {item.type === 'x' ? '📦 −1x' : `⚖️ −${item.value}`}
+                      ⚖️ +{v}
                     </button>
-                  ))
-                )}
+                  ))}
+                </div>
               </div>
             </div>
           </div>
