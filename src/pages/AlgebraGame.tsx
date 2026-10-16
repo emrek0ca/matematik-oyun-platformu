@@ -519,16 +519,21 @@ export default function AlgebraGame() {
           });
         }
       } else {
-        // Sabit sayı eksiltme
+        // Sabit sayı işlemi: Negatif sabit terimi nötrleme veya pozitif eksiltme
+        if (value < 0) {
+          // Negatif terimi nötrleme: Her iki kefeye mutlak değeri kadar ekle
+          const addVal = Math.abs(value);
+          handleOperation('add', addVal, false, side);
+          return;
+        }
+
+        // Pozitif sabit sayı eksiltme
         const currentThisB = side === 'left' ? gameState.currentEq.leftB : gameState.currentEq.rightB;
         const currentOtherB = side === 'left' ? gameState.currentEq.rightB : gameState.currentEq.leftB;
 
         if (currentOtherB <= 0) {
-          playSound('wrong');
-          setFeedback({
-            type: 'info',
-            message: `Karşı kefede pozitif sayı kalmadığı için çıkarma yapılamaz. Hedef x'i yalnız bırakmak!`,
-          });
+          // Karşı kefede sayı yoksa doğrudan bu değeri her iki kefeden çıkar
+          handleOperation('subtract', value, false, side);
           return;
         }
 
@@ -801,8 +806,39 @@ export default function AlgebraGame() {
           </div>
         </div>
 
-        {/* Görev & x'i Kurtarma İlerlemesi */}
+        {/* Pedagojik 4 Aşamalı Çözüm Metodolojisi & İlerleme */}
         <div className="paper-card !py-3 !px-4">
+          {/* 4 Aşama Göstergesi */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+            {[
+              { num: 1, title: 'Model & Eşitleme', desc: "x'leri tek kefede topla" },
+              { num: 2, title: 'Bilinmeyenin İzolasyonu', desc: 'Sabit terimleri nötrle' },
+              { num: 3, title: 'Sadeleştirme', desc: 'Katsayıya böl (÷ a)' },
+              { num: 4, title: 'Çözüm Kümesi', desc: 'x = ? elde edildi' },
+            ].map(st => {
+              const isCurrent = stageInfo.stage === st.num;
+              const isDone = stageInfo.stage > st.num;
+              return (
+                <div
+                  key={st.num}
+                  className={`p-2 rounded-lg border-2 text-xs font-mono transition-all ${
+                    isCurrent
+                      ? 'border-amber-600 bg-amber-50 text-amber-950 font-bold shadow-[2px_2px_0px_#d97706] ring-1 ring-amber-400'
+                      : isDone
+                      ? 'border-emerald-600 bg-emerald-50/90 text-emerald-900 shadow-[1px_1px_0px_#059669]'
+                      : 'border-zinc-300 bg-zinc-50 text-zinc-400 opacity-60'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold">
+                    <span>{isDone ? '✓' : isCurrent ? '▶' : `${st.num}.`}</span>
+                    <span className="truncate">{st.title}</span>
+                  </div>
+                  <div className="text-[10px] text-zinc-600 font-sans mt-0.5 truncate">{st.desc}</div>
+                </div>
+              );
+            })}
+          </div>
+
           <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
             <div className="flex items-center gap-2">
               <span className="text-xs font-extrabold uppercase font-mono text-zinc-800">
@@ -1019,8 +1055,25 @@ export default function AlgebraGame() {
                     transition={{ type: 'spring', stiffness: 140, damping: 10, mass: 0.9 }}
                   >
                     <rect x="-240" y="-4" width="480" height="8" rx="4" fill="#18181b" stroke="#18181b" strokeWidth="1" />
-                    <circle cx="0" cy="0" r="12" fill="#ffffff" stroke="#18181b" strokeWidth="2.5" />
-                    <circle cx="0" cy="0" r="4" fill="#18181b" />
+                    <circle
+                      cx="0"
+                      cy="0"
+                      r="14"
+                      fill={Math.abs(tiltAngle) < 1 ? '#10b981' : '#f59e0b'}
+                      stroke="#18181b"
+                      strokeWidth="2.5"
+                    />
+                    <text
+                      x="0"
+                      y="4.5"
+                      textAnchor="middle"
+                      fill="#ffffff"
+                      fontSize="13"
+                      fontWeight="900"
+                      fontFamily="monospace"
+                    >
+                      {Math.abs(tiltAngle) < 1 ? '=' : '≠'}
+                    </text>
                     <polygon
                       points="-2.5,0 2.5,0 0,-44"
                       fill={Math.abs(tiltAngle) < 1 ? '#059669' : '#e11d48'}
@@ -1215,11 +1268,13 @@ export default function AlgebraGame() {
                         className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px] hover:scale-105 ${
                           item.type === 'x'
                             ? 'bg-blue-600 text-white hover:bg-blue-700'
+                            : item.value < 0
+                            ? 'bg-rose-500 text-white hover:bg-rose-600'
                             : 'bg-amber-400 text-zinc-900 hover:bg-amber-300'
                         }`}
-                        title={`${item.label} nesnesini sol kefeden kaldır`}
+                        title={item.value < 0 ? `${Math.abs(item.value)} negatif ağırlığı nötrle` : `${item.label} nesnesini sol kefeden kaldır`}
                       >
-                        {item.type === 'x' ? '📦 −1x' : `⚖️ −${item.value}`}
+                        {item.type === 'x' ? '📦 −1x' : item.value < 0 ? `🎈 +${Math.abs(item.value)} Nötrle` : `⚖️ −${item.value}`}
                       </button>
                     ))
                   )}
@@ -1293,11 +1348,13 @@ export default function AlgebraGame() {
                         className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px] hover:scale-105 ${
                           item.type === 'x'
                             ? 'bg-blue-600 text-white hover:bg-blue-700'
+                            : item.value < 0
+                            ? 'bg-rose-500 text-white hover:bg-rose-600'
                             : 'bg-amber-400 text-zinc-900 hover:bg-amber-300'
                         }`}
-                        title={`${item.label} nesnesini sağ kefeden kaldır`}
+                        title={item.value < 0 ? `${Math.abs(item.value)} negatif ağırlığı nötrle` : `${item.label} nesnesini sağ kefeden kaldır`}
                       >
-                        {item.type === 'x' ? '📦 −1x' : `⚖️ −${item.value}`}
+                        {item.type === 'x' ? '📦 −1x' : item.value < 0 ? `🎈 +${Math.abs(item.value)} Nötrle` : `⚖️ −${item.value}`}
                       </button>
                     ))
                   )}
@@ -1347,6 +1404,35 @@ export default function AlgebraGame() {
               </span>
               <span className="text-[11px] text-zinc-500 font-medium">Tek tıkla her iki kefeye uygula</span>
             </div>
+
+            {/* 3. Aşama: Katsayıya Bölme (Sadeleştirme) Öne Çıkan Kartı */}
+            {stageInfo.stage === 3 && recommendedOps.find(op => op.type === 'divide') && (
+              <div className="mb-3 p-3.5 rounded-xl border-2 border-blue-600 bg-blue-50/95 shadow-[3px_3px_0px_#2563eb]">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="text-xs">
+                    <div className="font-extrabold text-blue-950 font-mono flex items-center gap-1.5 text-sm">
+                      <span>✂️</span> 3. Aşama: Çözüm Kümesinin Elde Edilmesi (Sadeleştirme)
+                    </div>
+                    <div className="text-[11px] text-blue-900 mt-0.5">
+                      Bilinmeyenin katsayısını 1'e indirgemek için her iki kefedeki varlıkları katsayıya bölün!
+                    </div>
+                  </div>
+                  {(() => {
+                    const divOp = recommendedOps.find(op => op.type === 'divide')!;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => handleOperation('divide', divOp.value, false, 'left')}
+                        disabled={gameState.solved || isTilting}
+                        className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-mono font-bold text-xs shadow-[2px_2px_0px_#1e3a8a] active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 animate-pulse"
+                      >
+                        <span>÷</span> Her İki Kefeyi {divOp.value}'ye Böl (1x'e Ulaş)
+                      </button>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
 
             {stageInfo.isIsolated && stageInfo.isolatedValue !== undefined ? (
               <button

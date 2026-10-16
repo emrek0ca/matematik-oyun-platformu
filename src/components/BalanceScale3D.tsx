@@ -19,21 +19,23 @@ export interface BalanceScale3DProps {
   interactive?: boolean;
 }
 
-/** Sayı değerini ferah standart pirinç ağırlık parçalarına (10, 5, 2, 1) ayırır */
+/** Sayı değerini ferah standart pirinç ağırlık parçalarına (10, 5, 2, 1) ayırır; negatif sayıları kırmızı negatif ağırlıklar olarak modeller */
 export function decomposeConstantToWeights(val: number, side: 'left' | 'right'): PanItem[] {
-  if (val <= 0) return [];
+  if (val === 0) return [];
   const items: PanItem[] = [];
-  let rem = val;
+  const isNeg = val < 0;
+  let rem = Math.abs(val);
   // Küçük sayılarda (<= 6) 2 ve 1'lik ağırlıklar tercih edilir; büyük sayılarda 5 ve 10'luk
-  const denoms = val <= 6 ? [2, 1] : [10, 5, 2, 1];
+  const denoms = rem <= 6 ? [2, 1] : [10, 5, 2, 1];
   let idx = 0;
   for (const d of denoms) {
     while (rem >= d) {
+      const signedVal = isNeg ? -d : d;
       items.push({
-        id: `${side}-const-${d}-${idx++}`,
+        id: `${side}-const-${signedVal}-${idx++}`,
         type: 'constant',
-        value: d,
-        label: `${d}`,
+        value: signedVal,
+        label: isNeg ? `−${d}` : `${d}`,
       });
       rem -= d;
     }
@@ -166,7 +168,7 @@ function CrateXItem({
   );
 }
 
-/** 3B Pirinç Hassas Gram Ağırlığı (Geniş Tıklama Alanı ile) */
+/** 3B Hassas Gram Ağırlığı (Pozitif Pirinç / Negatif Kırmızı Kütle) */
 function BrassWeightItem({
   item,
   position,
@@ -179,10 +181,12 @@ function BrassWeightItem({
   interactive?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
+  const isNegative = item.value < 0;
+  const absVal = Math.abs(item.value);
 
   // Değere göre belirgin boyut oranları
   const { radius, height } = useMemo(() => {
-    switch (item.value) {
+    switch (absVal) {
       case 1:
         return { radius: 0.25, height: 0.38 };
       case 2:
@@ -194,7 +198,15 @@ function BrassWeightItem({
       default:
         return { radius: 0.32, height: 0.50 };
     }
-  }, [item.value]);
+  }, [absVal]);
+
+  const bodyColor = isNegative
+    ? (hovered ? '#fca5a5' : '#dc2626')
+    : (hovered ? '#fef08a' : '#eab308');
+  const emissiveColor = isNegative
+    ? (hovered ? '#b91c1c' : '#450a0a')
+    : (hovered ? '#ca8a04' : '#000000');
+  const metalness = isNegative ? 0.82 : 0.92;
 
   return (
     <group
@@ -222,15 +234,15 @@ function BrassWeightItem({
         <meshBasicMaterial transparent opacity={0} />
       </mesh>
 
-      {/* Silindirik Pirinç Gövde */}
+      {/* Silindirik Gövde (Pozitif: Pirinç Altın / Negatif: Kırmızı Metalik) */}
       <mesh castShadow receiveShadow position={[0, height / 2, 0]}>
         <cylinderGeometry args={[radius * 0.95, radius, height, 32]} />
         <meshStandardMaterial
-          color={hovered ? '#fef08a' : '#eab308'}
-          metalness={0.92}
+          color={bodyColor}
+          metalness={metalness}
           roughness={0.2}
-          emissive={hovered ? '#ca8a04' : '#000000'}
-          emissiveIntensity={hovered ? 0.35 : 0}
+          emissive={emissiveColor}
+          emissiveIntensity={hovered ? 0.45 : isNegative ? 0.2 : 0}
         />
       </mesh>
 
@@ -238,12 +250,16 @@ function BrassWeightItem({
       <group position={[0, height + 0.05, 0]}>
         <mesh position={[0, 0.05, 0]}>
           <cylinderGeometry args={[radius * 0.35, radius * 0.45, 0.1, 16]} />
-          <meshStandardMaterial color="#ca8a04" metalness={0.92} roughness={0.2} />
+          <meshStandardMaterial
+            color={isNegative ? '#991b1b' : '#ca8a04'}
+            metalness={0.92}
+            roughness={0.2}
+          />
         </mesh>
         <mesh position={[0, 0.15, 0]}>
           <sphereGeometry args={[radius * 0.42, 16, 16]} />
           <meshStandardMaterial
-            color={hovered ? '#ffffff' : '#fef08a'}
+            color={hovered ? '#ffffff' : isNegative ? '#f87171' : '#fef08a'}
             metalness={0.95}
             roughness={0.16}
           />
@@ -252,7 +268,13 @@ function BrassWeightItem({
 
       {/* Sayı Etiketi (HTML Overlay) */}
       <Html position={[0, height / 2, radius + 0.08]} center distanceFactor={9} pointerEvents="none">
-        <div className="font-mono font-black text-xs text-amber-950 px-1.5 py-0.5 rounded-md bg-amber-300/90 border border-amber-600 shadow-sm select-none">
+        <div
+          className={`font-mono font-black text-xs px-1.5 py-0.5 rounded-md border shadow-sm select-none ${
+            isNegative
+              ? 'text-rose-950 bg-rose-200/95 border-rose-500'
+              : 'text-amber-950 bg-amber-300/90 border-amber-600'
+          }`}
+        >
           {item.label}
         </div>
       </Html>
@@ -260,8 +282,16 @@ function BrassWeightItem({
       {/* Hover İpucu */}
       {hovered && (
         <Html position={[0, height + 0.7, 0]} center distanceFactor={10} pointerEvents="none">
-          <div className="bg-zinc-900/95 text-white font-mono text-xs px-2.5 py-1 rounded-lg border-2 border-amber-400 shadow-xl whitespace-nowrap flex items-center gap-1.5 animate-bounce">
-            <span className="text-amber-300 font-bold">⚖️ −{item.value} Kaldır</span>
+          <div
+            className={`font-mono text-xs px-2.5 py-1 rounded-lg border-2 shadow-xl whitespace-nowrap flex items-center gap-1.5 animate-bounce ${
+              isNegative
+                ? 'bg-rose-950/95 text-white border-rose-400'
+                : 'bg-zinc-900/95 text-white border-amber-400'
+            }`}
+          >
+            <span className={isNegative ? 'text-rose-300 font-bold' : 'text-amber-300 font-bold'}>
+              {isNegative ? `🎈 +${absVal} Nötrle` : `⚖️ −${item.value} Kaldır`}
+            </span>
             <span className="text-[10px] text-zinc-300 font-normal">(Tıkla)</span>
           </div>
         </Html>
@@ -634,11 +664,31 @@ function ScaleModel({
             <meshStandardMaterial color="#ca8a04" metalness={0.92} roughness={0.25} />
           </mesh>
 
-          {/* Merkez Mafsal Pimi ve Parlak Başlığı */}
-          <mesh position={[0, 0, 0.16]} rotation={[Math.PI / 2, 0, 0]}>
-            <cylinderGeometry args={[0.3, 0.3, 0.22, 24]} />
-            <meshStandardMaterial color="#ffffff" metalness={0.95} roughness={0.12} />
-          </mesh>
+          {/* Merkez Mesnet Pimi ve Eşittir (=) Sembolü Rozeti (Merkez Mesnet = Eşittir) */}
+          <group position={[0, 0, 0.2]}>
+            <mesh rotation={[Math.PI / 2, 0, 0]}>
+              <cylinderGeometry args={[0.34, 0.34, 0.16, 32]} />
+              <meshStandardMaterial
+                color={isBalanced ? '#10b981' : '#f59e0b'}
+                metalness={0.9}
+                roughness={0.2}
+                emissive={isBalanced ? '#059669' : '#d97706'}
+                emissiveIntensity={0.4}
+              />
+            </mesh>
+            <Html position={[0, 0, 0.1]} center distanceFactor={10} pointerEvents="none">
+              <div
+                className={`w-7 h-7 rounded-full border-2 border-zinc-900 flex items-center justify-center font-mono font-black text-sm shadow-md select-none ${
+                  isBalanced
+                    ? 'bg-emerald-400 text-emerald-950 ring-2 ring-emerald-300'
+                    : 'bg-amber-400 text-amber-950 ring-2 ring-amber-300 animate-pulse'
+                }`}
+                title="Merkez Noktası (Mesnet): Matematiksel eşittir (=) işaretini temsil eder"
+              >
+                {isBalanced ? '=' : '≠'}
+              </div>
+            </Html>
+          </group>
 
           {/* Denge İbresi (Merkezden aşağı açı yayına uzanır) */}
           <group position={[0, 0, 0.48]}>

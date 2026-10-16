@@ -230,9 +230,15 @@ describe('BalanceScale3D - Weight Decomposition', () => {
     expect(sum).toBe(7);
   });
 
-  it('should handle zero or negative constants gracefully', () => {
+  it('should handle zero constants gracefully', () => {
     expect(decomposeConstantToWeights(0, 'left')).toEqual([]);
-    expect(decomposeConstantToWeights(-3, 'right')).toEqual([]);
+  });
+
+  it('should decompose negative constants into negative weights summing to negative value', () => {
+    const weights = decomposeConstantToWeights(-3, 'right');
+    const sum = weights.reduce((acc, w) => acc + w.value, 0);
+    expect(sum).toBe(-3);
+    expect(weights.every(w => w.value < 0)).toBe(true);
   });
 });
 

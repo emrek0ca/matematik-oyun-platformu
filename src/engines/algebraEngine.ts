@@ -522,8 +522,8 @@ export function getEquationStage(eq: Equation): {
     return {
       stage: 4,
       progressPercent: 100,
-      stageName: "🎉 x Tamamen Yalnız Bırakıldı!",
-      nextGoal: `x = ${eq.rightB}`,
+      stageName: "4. Aşama: Çözüm Kümesi Doğrulandı",
+      nextGoal: `x = ${eq.rightB} (Terazi Mükemmel Dengede ✓)`,
       isIsolated: true,
       isolatedValue: eq.rightB,
     };
@@ -533,8 +533,8 @@ export function getEquationStage(eq: Equation): {
     return {
       stage: 4,
       progressPercent: 100,
-      stageName: "🎉 x Tamamen Yalnız Bırakıldı!",
-      nextGoal: `x = ${eq.leftB}`,
+      stageName: "4. Aşama: Çözüm Kümesi Doğrulandı",
+      nextGoal: `x = ${eq.leftB} (Terazi Mükemmel Dengede ✓)`,
       isIsolated: true,
       isolatedValue: eq.leftB,
     };
@@ -544,8 +544,8 @@ export function getEquationStage(eq: Equation): {
     return {
       stage: 1,
       progressPercent: 25,
-      stageName: "1. Adım: x'leri Tek Kefede Topla",
-      nextGoal: "Her iki kefeden eşit sayıda x çıkararak x'leri tek tarafta topla.",
+      stageName: "1. Aşama: Modelin Kurulması & Eşitleme",
+      nextGoal: "Eşitliğin korunumu ilkesiyle her iki kefeden eşit sayıda x çıkararak değişkenleri tek tarafta topla.",
       isIsolated: false,
     };
   }
@@ -555,8 +555,8 @@ export function getEquationStage(eq: Equation): {
     return {
       stage: 2,
       progressPercent: 60,
-      stageName: "2. Adım: Sabit Sayıları Karşı Kefeye Gönder",
-      nextGoal: "x'in yanındaki sayıları her iki taraftan çıkararak/ekleyerek temizle.",
+      stageName: "2. Aşama: Bilinmeyenin İzolasyonu",
+      nextGoal: "Bilinmeyenin yanındaki sabit terimleri her iki kefeye aynı işlemi uygulayarak nötrle.",
       isIsolated: false,
     };
   }
@@ -566,8 +566,8 @@ export function getEquationStage(eq: Equation): {
     return {
       stage: 3,
       progressPercent: 85,
-      stageName: "3. Adım: x'i Yalnız Bırak",
-      nextGoal: `Her iki tarafı ${coeff}'ye bölerek 1 tane x'i bul.`,
+      stageName: "3. Aşama: Çözüm Kümesinin Elde Edilmesi",
+      nextGoal: `Her iki kefeyi katsayıya (${coeff}) bölerek 1 adet x blokunu elde et: x = ?`,
       isIsolated: false,
     };
   }
@@ -575,8 +575,8 @@ export function getEquationStage(eq: Equation): {
   return {
     stage: 4,
     progressPercent: 100,
-    stageName: "🎉 x Yalnız Bırakıldı!",
-    nextGoal: "Sonucu kontrol et!",
+    stageName: "4. Aşama: Çözüm Kümesi Doğrulandı",
+    nextGoal: `x = ${varOnLeft ? eq.rightB : eq.leftB} (Denge Sağlandı ✓)`,
     isIsolated: true,
     isolatedValue: varOnLeft ? eq.rightB : eq.leftB,
   };
