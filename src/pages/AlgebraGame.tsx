@@ -334,6 +334,18 @@ export default function AlgebraGame() {
     );
   }, [activeRightItems, effectiveXWeight]);
 
+  // 2B SVG Modu için Dinamik Terazi Eğim Açısı
+  const effective2DTiltAngle = useMemo(() => {
+    if (isTilting) return tiltAngle;
+    const massDiff = currentLeftMass - currentRightMass;
+    if (massDiff === 0) return 0;
+    // Sol ağır (massDiff > 0) -> SVG'de negatif açı (saat yönünün tersi: Sol aşağı, Sağ yukarı)
+    // Sağ ağır (massDiff < 0) -> SVG'de pozitif açı (saat yönü: Sağ aşağı, Sol yukarı)
+    const absDiff = Math.abs(massDiff);
+    const angleMagnitude = Math.min(22, 12 + Math.min(10, absDiff * 2));
+    return massDiff > 0 ? -angleMagnitude : angleMagnitude;
+  }, [isTilting, tiltAngle, currentLeftMass, currentRightMass]);
+
   function addFloatingToken(
     side: 'left' | 'right',
     text: string,
@@ -372,26 +384,62 @@ export default function AlgebraGame() {
 
     setIsTilting(true);
 
-    // ADIM 1: İlk Kefe Fiziksel Olarak Değişir (Terazi Eğilir!)
-    // Çıkarıldığında veya bölündüğünde kefe hafifler -> yukarı kalkar.
-    // Eklendiğinde veya çarpıldığında kefe ağırlaşır -> aşağı çöker.
+    // ADIM 1: İlk Kefe Fiziksel Olarak Değişir (Ağır basan taraf aşağı iner, hafifleyen yukarı kalkar!)
     let dipAngle = 0;
     if (type === 'subtract' || type === 'divide') {
-      dipAngle = triggerSide === 'left' ? 16 : -16;
+      dipAngle = triggerSide === 'left' ? 22 : -22;
     } else {
-      dipAngle = triggerSide === 'left' ? -16 : 16;
+      dipAngle = triggerSide === 'left' ? -22 : 22;
     }
+
+    // 1. Kefe için ara denklem (Tek tarafa uygulandığında terazinin gerçek dengesizlik durumu)
+    const step1Eq: Equation = { ...gameState.currentEq };
+    if (triggerSide === 'left') {
+      if (type === 'subtract') {
+        if (isVar) step1Eq.leftA = Math.max(0, step1Eq.leftA - value);
+        else step1Eq.leftB = step1Eq.leftB - value;
+      } else if (type === 'add') {
+        if (isVar) step1Eq.leftA = step1Eq.leftA + value;
+        else step1Eq.leftB = step1Eq.leftB + value;
+      } else if (type === 'divide') {
+        step1Eq.leftA = step1Eq.leftA / value;
+        step1Eq.leftB = step1Eq.leftB / value;
+      } else if (type === 'multiply') {
+        step1Eq.leftA = step1Eq.leftA * value;
+        step1Eq.leftB = step1Eq.leftB * value;
+      }
+    } else {
+      if (type === 'subtract') {
+        if (isVar) step1Eq.rightA = Math.max(0, step1Eq.rightA - value);
+        else step1Eq.rightB = step1Eq.rightB - value;
+      } else if (type === 'add') {
+        if (isVar) step1Eq.rightA = step1Eq.rightA + value;
+        else step1Eq.rightB = step1Eq.rightB + value;
+      } else if (type === 'divide') {
+        step1Eq.rightA = step1Eq.rightA / value;
+        step1Eq.rightB = step1Eq.rightB / value;
+      } else if (type === 'multiply') {
+        step1Eq.rightA = step1Eq.rightA * value;
+        step1Eq.rightB = step1Eq.rightB * value;
+      }
+    }
+
+    // Hemen 1. kefeyi güncelle (kefedeki nesneler ve kütle fiziksel olarak değişir)
+    setGameState(prev => ({
+      ...prev,
+      currentEq: step1Eq,
+    }));
 
     playSound('move');
     addFloatingToken(triggerSide, opLabel, type);
     setTiltAngle(dipAngle);
     const actionDesc =
       type === 'subtract' || type === 'divide'
-        ? `${triggerSide === 'left' ? 'Sol' : 'Sağ'} kefe hafifledi (Yukarı Kalktı ↗)`
-        : `${triggerSide === 'left' ? 'Sol' : 'Sağ'} kefe ağırlaştı (Aşağı İndi ↘)`;
+        ? `${triggerSide === 'left' ? 'Sol' : 'Sağ'} kefe hafifledi (Yukarı Kalktı ↗) — Karşı kefe ağır basıyor ↘`
+        : `${triggerSide === 'left' ? 'Sol' : 'Sağ'} kefe ağırlaştı (Aşağı Çöktü ↘)`;
     setTiltStatus(actionDesc);
 
-    // ADIM 2 (400ms sonra): İkinci kefe de aynı işlemi alır, terazi dengeye doğru salınır
+    // ADIM 2 (650ms sonra): İkinci kefe de aynı işlemi alır, terazi dengeye doğru salınır
     tiltTimerRef.current = setTimeout(() => {
       const otherSide = triggerSide === 'left' ? 'right' : 'left';
       addFloatingToken(otherSide, opLabel, type);
@@ -399,7 +447,7 @@ export default function AlgebraGame() {
 
       // Karşı kefe eşitlenir, terazi spring ile salınarak 0'a gelir
       setTiltAngle(0);
-      setTiltStatus('Karşı kefe eşitleniyor...');
+      setTiltStatus('Karşı kefe eşitleniyor, denge kuruluyor...');
 
       const updatedEq = result.newEq || result.newEquation;
       const newSteps = [...gameState.steps, equationToString(updatedEq)];
@@ -410,7 +458,7 @@ export default function AlgebraGame() {
         steps: newSteps,
       }));
 
-      // ADIM 3 (450ms sonra): Denge tamamen yerine oturur
+      // ADIM 3 (550ms sonra): Denge tamamen yerine oturur
       tiltSecondTimerRef.current = setTimeout(() => {
         setIsTilting(false);
         setTiltStatus(null);
@@ -430,8 +478,8 @@ export default function AlgebraGame() {
           type: 'info',
           message: `${opLabel} her iki kefeye uygulandı: Terazi tekrar tam dengede ✓`,
         });
-      }, 450);
-    }, 400);
+      }, 550);
+    }, 650);
   }
 
   function handleSolvedSuccess(val: number) {
@@ -992,8 +1040,10 @@ export default function AlgebraGame() {
                 rightItems={activeRightItems}
                 leftMass={currentLeftMass}
                 rightMass={currentRightMass}
+                externalTilt={tiltAngle}
+                isTilting={isTilting}
                 onItemClick={handle3DItemClick}
-                interactive={!gameState.solved && (gameMode !== 'rush' || !isRushGameOver)}
+                interactive={!gameState.solved && (gameMode !== 'rush' || !isRushGameOver) && !isTilting}
               />
             </div>
           ) : (
@@ -1051,7 +1101,7 @@ export default function AlgebraGame() {
                 {/* Dönen Terazi Kolu (Spring Animasyonu) */}
                 <g transform="translate(320, 75)">
                   <motion.g
-                    animate={{ rotate: Math.max(-20, Math.min(20, tiltAngle)) }}
+                    animate={{ rotate: Math.max(-24, Math.min(24, effective2DTiltAngle)) }}
                     transition={{ type: 'spring', stiffness: 140, damping: 10, mass: 0.9 }}
                   >
                     <rect x="-240" y="-4" width="480" height="8" rx="4" fill="#18181b" stroke="#18181b" strokeWidth="1" />
@@ -1059,7 +1109,7 @@ export default function AlgebraGame() {
                       cx="0"
                       cy="0"
                       r="14"
-                      fill={Math.abs(tiltAngle) < 1 ? '#10b981' : '#f59e0b'}
+                      fill={Math.abs(effective2DTiltAngle) < 1 ? '#10b981' : '#f59e0b'}
                       stroke="#18181b"
                       strokeWidth="2.5"
                     />
@@ -1072,11 +1122,11 @@ export default function AlgebraGame() {
                       fontWeight="900"
                       fontFamily="monospace"
                     >
-                      {Math.abs(tiltAngle) < 1 ? '=' : '≠'}
+                      {Math.abs(effective2DTiltAngle) < 1 ? '=' : '≠'}
                     </text>
                     <polygon
                       points="-2.5,0 2.5,0 0,-44"
-                      fill={Math.abs(tiltAngle) < 1 ? '#059669' : '#e11d48'}
+                      fill={Math.abs(effective2DTiltAngle) < 1 ? '#059669' : '#e11d48'}
                       stroke="#18181b"
                       strokeWidth="1.5"
                     />
@@ -1085,7 +1135,7 @@ export default function AlgebraGame() {
                     <g transform="translate(-190, 0)">
                       <circle cx="0" cy="0" r="4" fill="#ffffff" stroke="#18181b" strokeWidth="2" />
                       <motion.g
-                        animate={{ rotate: -Math.max(-20, Math.min(20, tiltAngle)) }}
+                        animate={{ rotate: -Math.max(-24, Math.min(24, effective2DTiltAngle)) }}
                         transition={{ type: 'spring', stiffness: 140, damping: 10, mass: 0.9 }}
                       >
                         <line x1="0" y1="0" x2="-45" y2="76" stroke="#18181b" strokeWidth="1.5" strokeDasharray="3 2" />
@@ -1139,7 +1189,7 @@ export default function AlgebraGame() {
                     <g transform="translate(190, 0)">
                       <circle cx="0" cy="0" r="4" fill="#ffffff" stroke="#18181b" strokeWidth="2" />
                       <motion.g
-                        animate={{ rotate: -Math.max(-20, Math.min(20, tiltAngle)) }}
+                        animate={{ rotate: -Math.max(-24, Math.min(24, effective2DTiltAngle)) }}
                         transition={{ type: 'spring', stiffness: 140, damping: 10, mass: 0.9 }}
                       >
                         <line x1="0" y1="0" x2="-45" y2="76" stroke="#18181b" strokeWidth="1.5" strokeDasharray="3 2" />

@@ -17,6 +17,8 @@ export interface BalanceScale3DProps {
   rightMass: number;
   onItemClick?: (side: 'left' | 'right', item: PanItem) => void;
   interactive?: boolean;
+  externalTilt?: number;
+  isTilting?: boolean;
 }
 
 /** Sayı değerini ferah standart pirinç ağırlık parçalarına (10, 5, 2, 1) ayırır; negatif sayıları kırmızı negatif ağırlıklar olarak modeller */
@@ -388,6 +390,8 @@ function PanAssembly({
   side,
   onItemClick,
   interactive,
+  totalMass,
+  isHeavy,
 }: {
   centerPos: [number, number, number];
   hookPos: [number, number, number];
@@ -395,6 +399,8 @@ function PanAssembly({
   side: 'left' | 'right';
   onItemClick?: (side: 'left' | 'right', item: PanItem) => void;
   interactive?: boolean;
+  totalMass?: number;
+  isHeavy?: boolean;
 }) {
   // Geniş kefe yarıçapı: 2.4 birim (3 kat daha geniş alan!)
   const panRadius = 2.4;
@@ -450,6 +456,26 @@ function PanAssembly({
           </mesh>
         ))}
 
+        {/* Kefe Kütle Rozeti ve Ağır Basma Göstergesi */}
+        <Html position={[0, -0.38, 0]} center distanceFactor={11} pointerEvents="none">
+          <div
+            className={`font-mono text-xs px-2.5 py-0.5 rounded-full border shadow-md font-bold select-none whitespace-nowrap flex items-center gap-1.5 transition-all ${
+              isHeavy
+                ? 'bg-rose-100 text-rose-950 border-rose-600 ring-2 ring-rose-400 font-extrabold scale-110 shadow-rose-200'
+                : 'bg-white/95 text-zinc-800 border-zinc-700'
+            }`}
+          >
+            <span>{isHeavy ? '⬇' : '⚖️'}</span>
+            <span>{side === 'left' ? 'Sol' : 'Sağ'} Kefe</span>
+            {totalMass !== undefined && (
+              <span className={`px-1.5 py-0.2 rounded font-black ${isHeavy ? 'bg-rose-600 text-white' : 'bg-zinc-200 text-zinc-800'}`}>
+                {totalMass} br
+              </span>
+            )}
+            {isHeavy && <span className="text-[10px] text-rose-700 font-black tracking-wider animate-pulse">(AĞIR)</span>}
+          </div>
+        </Html>
+
         {/* Kefe İçi Ferah Nesneler */}
         {positionedItems.map(({ item, pos }) =>
           item.type === 'x' ? (
@@ -475,6 +501,25 @@ function PanAssembly({
   );
 }
 
+/**
+ * Terazinin hedef eğim açısını (radyan) hesaplar.
+ * Sol kefe ağır bastığında pozitif açı (>0), sağ kefe ağır bastığında negatif açı (<0) döner.
+ * externalTilt verilmişse (derece cinsinden), o öncelikli olarak uygulanır.
+ */
+export function computeTargetAngle(massDiff: number, externalTilt?: number): number {
+  const maxAngle = 0.38; // ~21.8 derece belirgin eğim (2.15 birim düşey hareket)
+  if (externalTilt !== undefined && Math.abs(externalTilt) > 0.1) {
+    // AlgebraGame'de tiltAngle > 0 (saat yönü) sol hafif / sağ ağır demektir.
+    // 3B Three.js'te sol aşağı / sağ yukarı açı pozitif (+Z) olduğu için işaret terslenir.
+    return Math.max(-maxAngle, Math.min(maxAngle, -(externalTilt * Math.PI) / 180));
+  }
+  if (massDiff === 0) return 0;
+  // Fiziksel kütle farkı: 1 birim farkta bile belirgin eğim (~14°), artan farkta maksimuma ulaşır
+  const absDiff = Math.abs(massDiff);
+  const ratio = Math.min(1.0, 0.45 + Math.min(0.55, absDiff * 0.15));
+  return Math.sign(massDiff) * ratio * maxAngle;
+}
+
 /** Fiziksel Terazi Sahnesi (Genişletilmiş Kollar ve Hassas Yay Fiziği) */
 function ScaleModel({
   leftItems,
@@ -483,6 +528,8 @@ function ScaleModel({
   rightMass,
   onItemClick,
   interactive,
+  externalTilt,
+  isTilting,
 }: BalanceScale3DProps) {
   const beamRef = useRef<THREE.Group>(null);
   const physicsRef = useRef({
@@ -494,8 +541,8 @@ function ScaleModel({
 
   // Kiriş ve Askı Boyutları (Geniş kefelerin rahat hareket etmesi için)
   const armLength = 5.8; // Merkezden kefe askısına mesafe
-  const pivotY = 2.1; // Merkez mafsal yüksekliği
-  const chainLength = 3.3; // Askı uzunluğu
+  const pivotY = 2.6; // Merkez mafsal yüksekliği
+  const chainLength = 2.6; // Askı uzunluğu
 
   // Fizik motoru: Ağır basan taraf net şekilde aşağı iner, hafif taraf yukarı kalkar!
   useFrame((_, delta) => {
@@ -506,12 +553,11 @@ function ScaleModel({
     // rightMass > leftMass (Sağ ağır) => targetAngle negatif (Sağ AŞAĞI iner, Sol YUKARI kalkar).
     // Eşit olduğunda => targetAngle = 0 (Kefeler tam dengede).
     const massDiff = leftMass - rightMass;
-    const totalMass = Math.max(1, (leftMass + rightMass) * 0.35);
-    const targetAngle = Math.max(-0.28, Math.min(0.28, (massDiff / totalMass) * 0.28));
+    const targetAngle = computeTargetAngle(massDiff, externalTilt);
 
-    // Doğal yay salınımı ve sönümleme
-    const kSpring = 24.0;
-    const damping = 4.0;
+    // Doğal yay salınımı ve gerçekçi mekanik sönümleme
+    const kSpring = 26.0;
+    const damping = 4.2;
 
     const displacement = targetAngle - physicsRef.current.angle;
     const springForce = displacement * kSpring;
@@ -521,12 +567,13 @@ function ScaleModel({
     physicsRef.current.velocity += accel * dt;
     physicsRef.current.angle += physicsRef.current.velocity * dt;
 
-    // Mekanik durdurucu (maksimum ±16 derece)
-    if (physicsRef.current.angle > 0.28) {
-      physicsRef.current.angle = 0.28;
+    // Mekanik durdurucu (maksimum ±24 derece)
+    const mechanicalLimit = 0.42;
+    if (physicsRef.current.angle > mechanicalLimit) {
+      physicsRef.current.angle = mechanicalLimit;
       physicsRef.current.velocity = -physicsRef.current.velocity * 0.2;
-    } else if (physicsRef.current.angle < -0.28) {
-      physicsRef.current.angle = -0.28;
+    } else if (physicsRef.current.angle < -mechanicalLimit) {
+      physicsRef.current.angle = -mechanicalLimit;
       physicsRef.current.velocity = -physicsRef.current.velocity * 0.2;
     }
 
@@ -557,6 +604,8 @@ function ScaleModel({
   }, [currentAngle]);
 
   const isBalanced = Math.abs(currentAngle) < 0.02;
+  const isLeftHeavy = leftMass > rightMass;
+  const isRightHeavy = rightMass > leftMass;
 
   return (
     <group position={[0, -0.1, 0]}>
@@ -611,13 +660,13 @@ function ScaleModel({
         </mesh>
 
         {/* Ana Sütun Gövdesi */}
-        <mesh position={[0, 0.2, 0]}>
-          <cylinderGeometry args={[0.38, 0.52, 4.0, 32]} />
+        <mesh position={[0, 0.45, 0]}>
+          <cylinderGeometry args={[0.38, 0.52, 4.8, 32]} />
           <meshStandardMaterial color="#eab308" metalness={0.88} roughness={0.22} />
         </mesh>
 
         {/* Dekoratif Boğum Halkaları */}
-        {[-0.9, 1.1, 2.1].map((py, i) => (
+        {[-0.9, 1.2, 2.4].map((py, i) => (
           <mesh key={i} position={[0, py, 0]}>
             <torusGeometry args={[0.48, 0.07, 16, 32]} />
             <meshStandardMaterial color="#ca8a04" metalness={0.92} roughness={0.2} />
@@ -625,18 +674,18 @@ function ScaleModel({
         ))}
 
         {/* Açı Ölçer Skalası (Merkez Gösterge Plakası) */}
-        <group position={[0, 1.25, 0.46]}>
+        <group position={[0, 1.6, 0.46]}>
           <mesh>
-            <boxGeometry args={[2.6, 0.44, 0.06]} />
+            <boxGeometry args={[2.8, 0.44, 0.06]} />
             <meshStandardMaterial color="#fef08a" metalness={0.85} roughness={0.28} />
           </mesh>
           <Html position={[0, 0, 0.04]} center distanceFactor={10} pointerEvents="none">
-            <div className="flex items-center justify-between w-32 text-[10px] font-mono font-bold text-zinc-800 select-none">
-              <span>-15°</span>
+            <div className="flex items-center justify-between w-36 text-[10px] font-mono font-bold text-zinc-800 select-none">
+              <span>-20°</span>
               <span className={`px-1.5 py-0.5 rounded font-black ${isBalanced ? 'bg-emerald-600 text-white' : 'text-zinc-600'}`}>
                 0°
               </span>
-              <span>+15°</span>
+              <span>+20°</span>
             </div>
           </Html>
         </group>
@@ -693,8 +742,8 @@ function ScaleModel({
           {/* Denge İbresi (Merkezden aşağı açı yayına uzanır) */}
           <group position={[0, 0, 0.48]}>
             {/* İğne Gövdesi */}
-            <mesh position={[0, -0.75, 0]}>
-              <cylinderGeometry args={[0.025, 0.05, 1.5, 16]} />
+            <mesh position={[0, -0.65, 0]}>
+              <cylinderGeometry args={[0.025, 0.05, 1.3, 16]} />
               <meshStandardMaterial
                 color={isBalanced ? '#059669' : '#dc2626'}
                 metalness={0.8}
@@ -702,7 +751,7 @@ function ScaleModel({
               />
             </mesh>
             {/* İğne Ucu Oku */}
-            <mesh position={[0, -1.55, 0]} rotation={[0, 0, Math.PI]}>
+            <mesh position={[0, -1.35, 0]} rotation={[0, 0, Math.PI]}>
               <coneGeometry args={[0.08, 0.2, 16]} />
               <meshStandardMaterial
                 color={isBalanced ? '#059669' : '#dc2626'}
@@ -735,6 +784,8 @@ function ScaleModel({
         side="left"
         onItemClick={onItemClick}
         interactive={interactive}
+        totalMass={leftMass}
+        isHeavy={isLeftHeavy}
       />
 
       {/* Sağ Kefe Montajı */}
@@ -745,6 +796,8 @@ function ScaleModel({
         side="right"
         onItemClick={onItemClick}
         interactive={interactive}
+        totalMass={rightMass}
+        isHeavy={isRightHeavy}
       />
     </group>
   );
@@ -758,6 +811,8 @@ export default function BalanceScale3D({
   rightMass,
   onItemClick,
   interactive = true,
+  externalTilt,
+  isTilting,
 }: BalanceScale3DProps) {
   const controlsRef = useRef<any>(null);
 
@@ -828,6 +883,8 @@ export default function BalanceScale3D({
           rightMass={rightMass}
           onItemClick={onItemClick}
           interactive={interactive}
+          externalTilt={externalTilt}
+          isTilting={isTilting}
         />
 
         {/* Orbit Kontrolleri */}

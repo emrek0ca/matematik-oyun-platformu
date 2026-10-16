@@ -214,7 +214,7 @@ describe('Algebra Engine - Recommended Operations & Stages', () => {
   });
 });
 
-import { decomposeConstantToWeights, layoutPanItems, PanItem } from '../components/BalanceScale3D';
+import { decomposeConstantToWeights, layoutPanItems, computeTargetAngle, PanItem } from '../components/BalanceScale3D';
 
 describe('BalanceScale3D - Weight Decomposition', () => {
   it('should decompose 4 into weights summing to 4', () => {
@@ -283,3 +283,41 @@ describe('BalanceScale3D - Spacious Pan Layout (layoutPanItems)', () => {
     expect(cPos.pos[0]).toBeGreaterThan(0); // Right half
   });
 });
+
+describe('BalanceScale3D - Physics Tilt Angle (computeTargetAngle)', () => {
+  it('should return exactly 0 when mass difference is 0 (balanced state)', () => {
+    expect(computeTargetAngle(0)).toBe(0);
+  });
+
+  it('should sink left pan (positive angle) when left side is heavier', () => {
+    const angle = computeTargetAngle(2);
+    expect(angle).toBeGreaterThan(0);
+    // At least 14 degrees (~0.24 rad) for noticeable heavy sinking
+    expect(angle).toBeGreaterThanOrEqual(0.24);
+  });
+
+  it('should sink right pan (negative angle) when right side is heavier', () => {
+    const angle = computeTargetAngle(-2);
+    expect(angle).toBeLessThan(0);
+    expect(angle).toBeLessThanOrEqual(-0.24);
+  });
+
+  it('should cap tilt at maximum mechanical stop of 0.38 rad (~22 degrees)', () => {
+    const maxLeft = computeTargetAngle(100);
+    expect(maxLeft).toBeCloseTo(0.38, 2);
+
+    const maxRight = computeTargetAngle(-100);
+    expect(maxRight).toBeCloseTo(-0.38, 2);
+  });
+
+  it('should prioritize externalTilt when provided', () => {
+    // externalTilt = 22 degrees -> negative targetAngle (right sinks down, left rises)
+    const angleRightDown = computeTargetAngle(0, 22);
+    expect(angleRightDown).toBeCloseTo(-0.38, 1);
+
+    // externalTilt = -22 degrees -> positive targetAngle (left sinks down, right rises)
+    const angleLeftDown = computeTargetAngle(0, -22);
+    expect(angleLeftDown).toBeCloseTo(0.38, 1);
+  });
+});
+
