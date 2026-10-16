@@ -489,3 +489,143 @@ export function generatePizzaChallenge(difficulty: 'kolay' | 'orta' | 'zor'): Pi
   };
 }
 
+/** Model Türü */
+export type FractionModelType = 'circle' | 'strip' | 'grid' | 'numberline';
+
+/** Tam sayılı kesir temsili */
+export interface MixedFraction {
+  whole: number;
+  remainder: Fraction;
+}
+
+/** Bileşik kesri tam sayılı kesre dönüştür */
+export function toMixedFraction(f: Fraction): MixedFraction {
+  if (f.denominator === 0) throw new Error('Payda sıfır olamaz');
+  const whole = Math.floor(Math.abs(f.numerator) / Math.abs(f.denominator));
+  const remNum = Math.abs(f.numerator) % Math.abs(f.denominator);
+  return {
+    whole: (f.numerator < 0 !== f.denominator < 0) && whole > 0 ? -whole : whole,
+    remainder: {
+      numerator: remNum,
+      denominator: Math.abs(f.denominator),
+    },
+  };
+}
+
+/** Tam sayılı kesirden bileşik kesir oluştur */
+export function fromMixedFraction(whole: number, remainder: Fraction): Fraction {
+  const sign = whole < 0 ? -1 : 1;
+  const absWhole = Math.abs(whole);
+  const num = sign * (absWhole * remainder.denominator + remainder.numerator);
+  return simplify({ numerator: num, denominator: remainder.denominator });
+}
+
+/** Kesir genişletme simülasyonu: pay ve paydayı k ile çarp */
+export function expandFraction(f: Fraction, factor: number): {
+  original: Fraction;
+  factor: number;
+  expanded: Fraction;
+} {
+  if (factor <= 0) throw new Error('Genişletme çarpanı pozitif tam sayı olmalıdır');
+  return {
+    original: f,
+    factor,
+    expanded: {
+      numerator: f.numerator * factor,
+      denominator: f.denominator * factor,
+    },
+  };
+}
+
+/** Ortak Paydaya Getirme ve Adım Adım İşlem İspatı */
+export interface CommonDenominatorStep {
+  commonDen: number;
+  aFactor: number;
+  bFactor: number;
+  expandedA: Fraction;
+  expandedB: Fraction;
+  result: Fraction;
+  simplifiedResult: Fraction;
+  steps: string[];
+}
+
+export function getCommonDenominatorSteps(
+  a: Fraction,
+  b: Fraction,
+  op: 'add' | 'subtract'
+): CommonDenominatorStep {
+  const commonDen = lcm(a.denominator, b.denominator);
+  const aFactor = commonDen / a.denominator;
+  const bFactor = commonDen / b.denominator;
+
+  const expandedA: Fraction = {
+    numerator: a.numerator * aFactor,
+    denominator: commonDen,
+  };
+  const expandedB: Fraction = {
+    numerator: b.numerator * bFactor,
+    denominator: commonDen,
+  };
+
+  const rawResultNum = op === 'add'
+    ? expandedA.numerator + expandedB.numerator
+    : expandedA.numerator - expandedB.numerator;
+
+  const result: Fraction = {
+    numerator: rawResultNum,
+    denominator: commonDen,
+  };
+
+  const simplifiedResult = simplify(result);
+
+  const opSymbol = op === 'add' ? '+' : '−';
+  const opVerb = op === 'add' ? 'toplandı' : 'çıkarıldı';
+
+  const steps: string[] = [
+    `1. Aşama (Paydaları İnceleme): Kesirlerin paydaları ${a.denominator} ve ${b.denominator}. Farklı boyutta oldukları için doğrudan ${opVerb} yapılamaz.`,
+    `2. Aşama (Ortak Payda Bulma): EKOK(${a.denominator}, ${b.denominator}) = ${commonDen}. Her iki model de ${commonDen}'lik eş parçalara genişletilir.`,
+    `3. Aşama (Genişletme): ${fractionToString(a)} kesri ${aFactor} ile genişletilerek ${expandedA.numerator}/${commonDen} olur. ${fractionToString(b)} kesri ${bFactor} ile genişletilerek ${expandedB.numerator}/${commonDen} olur.`,
+    `4. Aşama (Eş Parçalarla İşlem): Artık tüm parçalar 1/${commonDen} boyutundadır! ${expandedA.numerator}/${commonDen} ${opSymbol} ${expandedB.numerator}/${commonDen} = ${rawResultNum}/${commonDen}.`,
+  ];
+
+  if (simplifiedResult.numerator !== result.numerator || simplifiedResult.denominator !== result.denominator) {
+    steps.push(`5. Aşama (Sadeleştirme): ${rawResultNum}/${commonDen} sadeleştirilerek ${fractionToString(simplifiedResult)} sonucuna ulaşılır.`);
+  }
+
+  return {
+    commonDen,
+    aFactor,
+    bFactor,
+    expandedA,
+    expandedB,
+    result,
+    simplifiedResult,
+    steps,
+  };
+}
+
+/** Izgara boyutları (satır x sütun) */
+export function getGridDimensions(denominator: number): { rows: number; cols: number } {
+  switch (denominator) {
+    case 1: return { rows: 1, cols: 1 };
+    case 2: return { rows: 1, cols: 2 };
+    case 3: return { rows: 1, cols: 3 };
+    case 4: return { rows: 2, cols: 2 };
+    case 5: return { rows: 1, cols: 5 };
+    case 6: return { rows: 2, cols: 3 };
+    case 7: return { rows: 1, cols: 7 };
+    case 8: return { rows: 2, cols: 4 };
+    case 9: return { rows: 3, cols: 3 };
+    case 10: return { rows: 2, cols: 5 };
+    case 12: return { rows: 3, cols: 4 };
+    case 14: return { rows: 2, cols: 7 };
+    case 15: return { rows: 3, cols: 5 };
+    case 16: return { rows: 4, cols: 4 };
+    default:
+      return denominator % 2 === 0
+        ? { rows: 2, cols: Math.floor(denominator / 2) }
+        : { rows: 1, cols: denominator };
+  }
+}
+
+

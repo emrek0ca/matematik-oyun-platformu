@@ -25,10 +25,10 @@ const GAMES: GameCardData[] = [
   {
     id: 'fraction',
     title: 'Kesir Atölyesi',
-    subtitle: 'Kesirleri Birleştir',
-    description: 'Müşterilerin istediği kesirli pizzaları doğru dilimleri tepside birleştirerek hazırla! Süreye karşı yarış, kombo yap.',
+    subtitle: 'Bütün-Parça & Rasyonel Sayı Simülasyonu',
+    description: 'Geometrik modeller (daire, şerit, ızgara, sayı doğrusu) ile kesirleri inşa et, denk kesir teoremini ve ortak paydalı işlemleri keşfet!',
     icon: '🍕',
-    topics: ['Kesir Toplama', 'Payda Eşitleme', 'Hız & Kombo'],
+    topics: ['Bütün-Parça', 'Denk Kesirler', 'Ortak Payda', 'Pizza Şefi'],
     difficulty: 'Kolay → Zor',
   },
   {

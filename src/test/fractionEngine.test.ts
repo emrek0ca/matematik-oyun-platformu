@@ -16,6 +16,11 @@ import {
   lcm,
   toDecimal,
   explainComparison,
+  toMixedFraction,
+  fromMixedFraction,
+  expandFraction,
+  getCommonDenominatorSteps,
+  getGridDimensions,
 } from '../engines/fractionEngine';
 
 describe('Fraction Engine - fraction()', () => {
@@ -163,3 +168,81 @@ describe('Fraction Engine - explainComparison()', () => {
     expect(explanation).toContain('10'); // LCM of 5 and 2
   });
 });
+
+describe('Fraction Engine - toMixedFraction() & fromMixedFraction()', () => {
+  it('should convert 7/4 to 1 and 3/4', () => {
+    const mixed = toMixedFraction({ numerator: 7, denominator: 4 });
+    expect(mixed.whole).toBe(1);
+    expect(mixed.remainder.numerator).toBe(3);
+    expect(mixed.remainder.denominator).toBe(4);
+  });
+
+  it('should convert 3/4 to 0 and 3/4', () => {
+    const mixed = toMixedFraction({ numerator: 3, denominator: 4 });
+    expect(mixed.whole).toBe(0);
+    expect(mixed.remainder.numerator).toBe(3);
+    expect(mixed.remainder.denominator).toBe(4);
+  });
+
+  it('should convert 8/4 to 2 and 0/4', () => {
+    const mixed = toMixedFraction({ numerator: 8, denominator: 4 });
+    expect(mixed.whole).toBe(2);
+    expect(mixed.remainder.numerator).toBe(0);
+  });
+
+  it('should convert mixed fraction back to improper fraction', () => {
+    const improper = fromMixedFraction(1, { numerator: 3, denominator: 4 });
+    expect(improper.numerator).toBe(7);
+    expect(improper.denominator).toBe(4);
+  });
+});
+
+describe('Fraction Engine - expandFraction()', () => {
+  it('should expand 2/3 by factor 3 to 6/9', () => {
+    const exp = expandFraction({ numerator: 2, denominator: 3 }, 3);
+    expect(exp.expanded.numerator).toBe(6);
+    expect(exp.expanded.denominator).toBe(9);
+    expect(areEqual(exp.original, exp.expanded)).toBe(true);
+  });
+});
+
+describe('Fraction Engine - getCommonDenominatorSteps()', () => {
+  it('should compute common denominator steps for 1/2 + 1/3', () => {
+    const info = getCommonDenominatorSteps(
+      { numerator: 1, denominator: 2 },
+      { numerator: 1, denominator: 3 },
+      'add'
+    );
+    expect(info.commonDen).toBe(6);
+    expect(info.aFactor).toBe(3);
+    expect(info.bFactor).toBe(2);
+    expect(info.expandedA.numerator).toBe(3);
+    expect(info.expandedB.numerator).toBe(2);
+    expect(info.result.numerator).toBe(5);
+    expect(info.result.denominator).toBe(6);
+    expect(info.steps.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('should compute common denominator steps for 3/4 - 1/2', () => {
+    const info = getCommonDenominatorSteps(
+      { numerator: 3, denominator: 4 },
+      { numerator: 1, denominator: 2 },
+      'subtract'
+    );
+    expect(info.commonDen).toBe(4);
+    expect(info.result.numerator).toBe(1);
+    expect(info.result.denominator).toBe(4);
+  });
+});
+
+describe('Fraction Engine - getGridDimensions()', () => {
+  it('should return suitable row and column layouts for common denominators', () => {
+    expect(getGridDimensions(4)).toEqual({ rows: 2, cols: 2 });
+    expect(getGridDimensions(6)).toEqual({ rows: 2, cols: 3 });
+    expect(getGridDimensions(8)).toEqual({ rows: 2, cols: 4 });
+    expect(getGridDimensions(9)).toEqual({ rows: 3, cols: 3 });
+    expect(getGridDimensions(12)).toEqual({ rows: 3, cols: 4 });
+    expect(getGridDimensions(16)).toEqual({ rows: 4, cols: 4 });
+  });
+});
+
