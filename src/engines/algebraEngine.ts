@@ -507,7 +507,7 @@ export function getRecommendedOperations(eq: Equation): QuickAction[] {
   return actions;
 }
 
-export function getEquationStage(eq: Equation): {
+export function getEquationStage(eq: Equation, expectedX?: number): {
   stage: 1 | 2 | 3 | 4;
   progressPercent: number;
   stageName: string;
@@ -519,6 +519,15 @@ export function getEquationStage(eq: Equation): {
   const isIsolatedRight = eq.rightA === 1 && eq.rightB === 0 && eq.leftA === 0;
 
   if (isIsolatedLeft) {
+    if (expectedX !== undefined && Math.abs(eq.rightB - expectedX) > 1e-10) {
+      return {
+        stage: 2,
+        progressPercent: 50,
+        stageName: "Geçici Dengesizlik: Eşitlik Bozuldu",
+        nextGoal: `Terazinin dengesi bozuldu (x ≠ ${eq.rightB})! Karşı kefeden de aynı miktarı eksilterek terazi dengesini kur.`,
+        isIsolated: false,
+      };
+    }
     return {
       stage: 4,
       progressPercent: 100,
@@ -530,6 +539,15 @@ export function getEquationStage(eq: Equation): {
   }
 
   if (isIsolatedRight) {
+    if (expectedX !== undefined && Math.abs(eq.leftB - expectedX) > 1e-10) {
+      return {
+        stage: 2,
+        progressPercent: 50,
+        stageName: "Geçici Dengesizlik: Eşitlik Bozuldu",
+        nextGoal: `Terazinin dengesi bozuldu (x ≠ ${eq.leftB})! Karşı kefeden de aynı miktarı eksilterek terazi dengesini kur.`,
+        isIsolated: false,
+      };
+    }
     return {
       stage: 4,
       progressPercent: 100,

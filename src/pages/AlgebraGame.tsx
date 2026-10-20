@@ -46,6 +46,8 @@ export default function AlgebraGame() {
   const [playMode, setPlayMode] = useState<PlayMode>('equation');
   const [difficulty, setDifficulty] = useState<Difficulty>('kolay');
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
+  // Kefe Etkileşim Modu (Otomatik Denklik vs İki Aşamalı Fiziksel Kefe)
+  const [panInteractionMode, setPanInteractionMode] = useState<'balanced' | 'step'>('balanced');
 
   // MOD B: Denklem Çözme Durumu
   const [equation, setEquation] = useState<Equation>(() => generateEquation('kolay'));
@@ -130,24 +132,27 @@ export default function AlgebraGame() {
     startNewProblem(difficulty);
   }, [difficulty, startNewProblem]);
 
-  // MOD B: Kefelerdeki PanItem Elemanları
+  // MOD B: Kefelerdeki PanItem Elemanları (Karşı kefeyle eşleşen parçalama birimi ile)
+  const targetForRight = Math.abs(currentEq.leftB) > 0 ? Math.abs(currentEq.leftB) : undefined;
+  const targetForLeft = Math.abs(currentEq.rightB) > 0 ? Math.abs(currentEq.rightB) : undefined;
+
   const leftPanItems = useMemo<PanItem[]>(() => {
     const items: PanItem[] = [];
     for (let i = 0; i < Math.max(0, currentEq.leftA); i++) {
       items.push({ id: `l-x-${i}`, type: 'x', value: 1, label: 'x' });
     }
-    items.push(...decomposeConstantToWeights(currentEq.leftB, 'left'));
+    items.push(...decomposeConstantToWeights(currentEq.leftB, 'left', targetForLeft));
     return items;
-  }, [currentEq.leftA, currentEq.leftB]);
+  }, [currentEq.leftA, currentEq.leftB, targetForLeft]);
 
   const rightPanItems = useMemo<PanItem[]>(() => {
     const items: PanItem[] = [];
     for (let i = 0; i < Math.max(0, currentEq.rightA); i++) {
       items.push({ id: `r-x-${i}`, type: 'x', value: 1, label: 'x' });
     }
-    items.push(...decomposeConstantToWeights(currentEq.rightB, 'right'));
+    items.push(...decomposeConstantToWeights(currentEq.rightB, 'right', targetForRight));
     return items;
-  }, [currentEq.rightA, currentEq.rightB]);
+  }, [currentEq.rightA, currentEq.rightB, targetForRight]);
 
   // MOD B Fiziksel Kütleler (Gizli x kütlesi dahil edilerek)
   const currentLeftMass = useMemo(() => {
@@ -308,11 +313,31 @@ export default function AlgebraGame() {
     }, 450);
   }, [solved, isTilting, currentEq, leftPanItems, rightPanItems, steps, playSound, triggerSuccess]);
 
-  // MOD B: Tek Kefeden Nesne Çıkarma (Denge Bozulmasının Öğretici Görsel Kanıtı)
+  // MOD B: Kefe Nesnesine Tıklandığında Çıkarma İşlemi
   const handleRemoveItem = useCallback((side: 'left' | 'right', item: PanItem) => {
     if (solved || isTilting) return;
 
-    // Snapshot
+    // 1. MOD: Otomatik Denklik Modu (Tıkladığın miktar her iki kefeden eşit çıkarılır)
+    if (panInteractionMode === 'balanced') {
+      if (item.type === 'x') {
+        // İki tarafta da x varsa 1x çıkar
+        if (currentEq.leftA > 0 && currentEq.rightA > 0) {
+          applyBalancedOperation('subtract', 1, true);
+        } else {
+          setFeedback({
+            type: 'info',
+            message: `Karşı kefede x kutusu yok. Hedefimiz x'i tek kefede yalnız bırakmak!`,
+          });
+          playSound('wrong');
+        }
+      } else {
+        // Sabit sayı (ör. 5): Her iki kefeden eşit çıkar
+        applyBalancedOperation('subtract', item.value, false);
+      }
+      return;
+    }
+
+    // 2. MOD: İki Aşamalı Fiziksel Kefe Modu (Tek kefeden kaldırılır, terazi eğilir)
     setHistory(prev => [
       ...prev,
       {
@@ -338,26 +363,29 @@ export default function AlgebraGame() {
     setCurrentEq(nextEq);
     playSound('move');
 
-    // Denge bozuldu uyarısı ve eğitimsel geri bildirim
-    const isNowBalanced = (nextEq.leftA * trueSolution + nextEq.leftB) === (nextEq.rightA * trueSolution + nextEq.rightB);
+    // Denge kontrolü
+    const newLeftMass = nextEq.leftA * trueSolution + nextEq.leftB;
+    const newRightMass = nextEq.rightA * trueSolution + nextEq.rightB;
+    const isNowBalanced = Math.abs(newLeftMass - newRightMass) < 1e-10;
+
     if (!isNowBalanced) {
       playSound('wrong');
-      setStats(s => ({ ...s, wrongAttempts: s.wrongAttempts + 1 }));
+      const otherSide = isLeft ? 'sağ' : 'sol';
       setFeedback({
         type: 'error',
-        message: `⚠️ Denge Bozuldu! ${side === 'left' ? 'Sol' : 'Sağ'} kefeden ${item.label} kaldırdın ama karşı kefeye dokunmadın. Terazinin yeniden yatay konuma gelmesi için karşı kefeden de ${item.label} kaldırmalısın!`,
+        message: `⚠️ Denge Bozuldu! ${isLeft ? 'Sol' : 'Sağ'} kefeden ${item.label} kaldırdın (Eşitlik bozuldu!). Teraziyi tekrar yatay dengeye getirmek için ${otherSide} kefedeki ${item.label} ağırlığına da tıkla!`,
       });
     } else {
       setFeedback({
         type: 'success',
-        message: `✓ Harika! Her iki kefe eşitlendi ve denge sağlandı!`,
+        message: `✓ Harika! Her iki kefe de eşitlendi ve terazi tekrar tam dengede!`,
       });
-      const stage = getEquationStage(nextEq);
+      const stage = getEquationStage(nextEq, trueSolution);
       if (stage.isIsolated && stage.isolatedValue !== undefined) {
         triggerSuccess(stage.isolatedValue);
       }
     }
-  }, [solved, isTilting, currentEq, leftPanItems, rightPanItems, steps, playSound, trueSolution, triggerSuccess]);
+  }, [solved, isTilting, panInteractionMode, currentEq, leftPanItems, rightPanItems, steps, playSound, trueSolution, triggerSuccess, applyBalancedOperation]);
 
   // Sürükle ve Bırak (Drag & Drop) Olayları
   const handleDragStart = (type: 'x' | 'constant', value: number) => {
@@ -428,7 +456,7 @@ export default function AlgebraGame() {
     }
   };
 
-  const stageInfo = getEquationStage(currentEq);
+  const stageInfo = getEquationStage(currentEq, trueSolution);
   const recommendedOps = getRecommendedOperations(currentEq);
   const progressiveHintData = getProgressiveHints(currentEq, hintLevel || 1);
 
@@ -655,11 +683,51 @@ export default function AlgebraGame() {
         <div className="paper-card relative overflow-hidden">
           {/* Üst Durum Göstergesi */}
           <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-mono font-bold text-zinc-500 uppercase">Mevcut Durum:</span>
               <span className="px-3 py-1 rounded-lg border-2 border-zinc-900 bg-zinc-50 font-mono font-extrabold text-sm shadow-[2px_2px_0px_#18181b]">
-                {playMode === 'equation' ? equationToString(currentEq) : freeScaleEval.equationDisplay}
+                {playMode === 'equation'
+                  ? currentLeftMass === currentRightMass
+                    ? equationToString(currentEq)
+                    : `${formatSide(currentEq.leftA, currentEq.leftB)} ≠ ${formatSide(currentEq.rightA, currentEq.rightB)} (Denge Bozuldu!)`
+                  : freeScaleEval.equationDisplay}
               </span>
+
+              {/* Kefe Etkileşim Modu Seçici (Otomatik Denklik vs İki Aşamalı Tek Tek Kaldırma) */}
+              {playMode === 'equation' && (
+                <div className="flex p-0.5 rounded-lg border border-zinc-800 bg-zinc-100 shadow-sm text-xs font-mono ml-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPanInteractionMode('balanced');
+                      playSound('click');
+                    }}
+                    className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                      panInteractionMode === 'balanced'
+                        ? 'bg-zinc-900 text-white shadow-sm'
+                        : 'text-zinc-700 hover:text-zinc-900'
+                    }`}
+                    title="Tıkladığın ağırlık her iki kefeden aynı anda çıkarılır (Denklik Kuralı)"
+                  >
+                    ⚡ Eşit Çıkar (Otomatik)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPanInteractionMode('step');
+                      playSound('click');
+                    }}
+                    className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                      panInteractionMode === 'step'
+                        ? 'bg-amber-500 text-zinc-950 font-black shadow-sm'
+                        : 'text-zinc-700 hover:text-zinc-900'
+                    }`}
+                    title="Kefelerden tek tek ağırlık kaldırıp dengeyi adım adım kurarsın"
+                  >
+                    🖐️ Tek Tek Kaldır (Fiziksel)
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Denge Durum Rozeti */}

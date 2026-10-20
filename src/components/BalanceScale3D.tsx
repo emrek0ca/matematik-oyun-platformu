@@ -21,15 +21,35 @@ export interface BalanceScale3DProps {
   isTilting?: boolean;
 }
 
-/** Sayı değerini ferah standart pirinç ağırlık parçalarına (10, 5, 2, 1) ayırır; negatif sayıları kırmızı negatif ağırlıklar olarak modeller */
-export function decomposeConstantToWeights(val: number, side: 'left' | 'right'): PanItem[] {
+/** Sayı değerini ferah standart pirinç ağırlık parçalarına (10, 5, 3, 2, 1) ayırır; karşı kefeyle eşleşen hedef birim varsa (örn: 10 içindeki iki adet 5) uyumlu parçalar oluşturur */
+export function decomposeConstantToWeights(
+  val: number,
+  side: 'left' | 'right',
+  matchUnit?: number
+): PanItem[] {
   if (val === 0) return [];
   const items: PanItem[] = [];
   const isNeg = val < 0;
   let rem = Math.abs(val);
-  // Küçük sayılarda (<= 6) 2 ve 1'lik ağırlıklar tercih edilir; büyük sayılarda 5 ve 10'luk
-  const denoms = rem <= 6 ? [2, 1] : [10, 5, 2, 1];
   let idx = 0;
+
+  // Karşı kefede bir hedef sayı varsa (ör. sol kefede 5, sağ kefede 10):
+  // Sağ kefedeki 10'u önce 5'lik eş parçalara ayır ki öğrenci iki kefeden de 5 çıkarabilsin!
+  if (matchUnit && matchUnit > 0 && rem >= matchUnit) {
+    while (rem >= matchUnit) {
+      const signedVal = isNeg ? -matchUnit : matchUnit;
+      items.push({
+        id: `${side}-const-${signedVal}-${idx++}`,
+        type: 'constant',
+        value: signedVal,
+        label: isNeg ? `−${matchUnit}` : `${matchUnit}`,
+      });
+      rem -= matchUnit;
+    }
+  }
+
+  // Standart ağırlık seti (10, 5, 3, 2, 1)
+  const denoms = [10, 5, 3, 2, 1];
   for (const d of denoms) {
     while (rem >= d) {
       const signedVal = isNeg ? -d : d;
