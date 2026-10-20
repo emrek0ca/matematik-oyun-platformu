@@ -581,3 +581,177 @@ export function getEquationStage(eq: Equation): {
     isolatedValue: varOnLeft ? eq.rightB : eq.leftB,
   };
 }
+
+/** 3 Aşamalı Kademeli İpucu Sistemi */
+export interface ProgressiveHint {
+  level: 1 | 2 | 3;
+  levelTitle: string;
+  question: string;     // 1. Aşama: Düşündürücü Soru
+  visualCue: string;    // 2. Aşama: Görsel Yönlendirme
+  actionStep: string;   // 3. Aşama: Adım Adım Çözüm Desteği
+  recommendedAction?: QuickAction;
+}
+
+export function getProgressiveHints(eq: Equation, hintLevel: number = 1): ProgressiveHint {
+  const ops = getRecommendedOperations(eq);
+  const topOp = ops[0];
+  const stage = getEquationStage(eq);
+
+  const levelClamped = Math.min(3, Math.max(1, hintLevel)) as 1 | 2 | 3;
+  const levelTitle =
+    levelClamped === 1
+      ? '1. Aşama: Düşündürücü Soru'
+      : levelClamped === 2
+      ? '2. Aşama: Görsel Yönlendirme'
+      : '3. Aşama: Adım Adım Çözüm';
+
+  if (stage.isIsolated && stage.isolatedValue !== undefined) {
+    return {
+      level: levelClamped,
+      levelTitle,
+      question: `x kutusu tek başına kaldı! Karşı kefedeki toplam ağırlık kaç birim?`,
+      visualCue: `Karşı kefedeki sayı doğrudan x'in değeridir: x = ${stage.isolatedValue}.`,
+      actionStep: `Sonucu onayla veya cevaba ${stage.isolatedValue} yazıp doğrula.`,
+      recommendedAction: undefined,
+    };
+  }
+
+  if (!topOp) {
+    return {
+      level: levelClamped,
+      levelTitle,
+      question: `Teraziye baktığında hangi kefenin daha sadeleşebileceğini düşünüyorsun?`,
+      visualCue: `Amacımız bir kefede tek bir x kutusu, diğerinde sadece sayı bırakmak.`,
+      actionStep: `Denklemi sadeleştirmek için her iki kefeden aynı nesneleri çıkar.`,
+      recommendedAction: undefined,
+    };
+  }
+
+  // 1. Her iki tarafta da x varsa
+  if (topOp.isVariable) {
+    return {
+      level: levelClamped,
+      levelTitle,
+      question: `Her iki kefede de x kutusu var. Terazi dengesini bozmadan x'leri tek bir kefede nasıl toplayabilirsin?`,
+      visualCue: `Sağ tarafta daha az sayıda x varsa, her iki kefeden de bu kadar x kutusu kaldırmayı dene!`,
+      actionStep: `İki kefeden de ${topOp.value === 1 ? '1 adet x kutusu' : `${topOp.value} adet x kutusu`} eksilt.`,
+      recommendedAction: topOp,
+    };
+  }
+
+  // 2. x'in yanındaki sabit sayılar
+  if (topOp.type === 'subtract' || topOp.type === 'add') {
+    const isSub = topOp.type === 'subtract';
+    return {
+      level: levelClamped,
+      levelTitle,
+      question: `Bilinmeyen x'in yanında duran sayı bloklarını diğer tarafa geçirmeden nasıl nötrleyebilirsin?`,
+      visualCue: `Bir kefedeki +${topOp.value} ağırlığını yok etmek için terazinin iki tarafına da zıt işlem uygulamalısın.`,
+      actionStep: `Her iki kefeden ${isSub ? `${topOp.value} birim ağırlık çıkar` : `${topOp.value} birim ağırlık ekle`}.`,
+      recommendedAction: topOp,
+    };
+  }
+
+  // 3. x'in katsayısı
+  if (topOp.type === 'divide') {
+    return {
+      level: levelClamped,
+      levelTitle,
+      question: `Kefede birden çok x kutusu var. 1 tane x'in ağırlığını bulmak için terazideki blokları nasıl paylaştırırsın?`,
+      visualCue: `Her iki kefedeki ağırlıkları x sayısına (${topOp.value}) bölerek eşit gruplara ayır.`,
+      actionStep: `Her iki kefedeki miktarı ${topOp.value}'ye böl: ÷${topOp.value}.`,
+      recommendedAction: topOp,
+    };
+  }
+
+  return {
+    level: levelClamped,
+    levelTitle,
+    question: `Dengeyi sağlamak ve x'i yalnız bırakmak için ters işlem düşün.`,
+    visualCue: `Denklemin iki tarafına da aynı işlemi yapmayı unutma.`,
+    actionStep: `${topOp.label} işlemini uygula.`,
+    recommendedAction: topOp,
+  };
+}
+
+/** Serbest Terazi İçin Matematiksel İfade ve Eşitlik Tespiti */
+export interface FreeScaleItem {
+  id: string;
+  type: 'x' | 'constant';
+  value: number; // constant için kütle, x için 1 (katsayı)
+  label: string;
+}
+
+export function evaluateFreeScale(
+  leftItems: FreeScaleItem[],
+  rightItems: FreeScaleItem[],
+  hiddenXValue: number = 4
+): {
+  leftMass: number;
+  rightMass: number;
+  diff: number;
+  isBalanced: boolean;
+  leftFormula: string;
+  rightFormula: string;
+  equationDisplay: string;
+  discoveredX?: number;
+} {
+  const leftXCount = leftItems.filter(i => i.type === 'x').length;
+  const leftConstTotal = leftItems.filter(i => i.type === 'constant').reduce((s, i) => s + i.value, 0);
+
+  const rightXCount = rightItems.filter(i => i.type === 'x').length;
+  const rightConstTotal = rightItems.filter(i => i.type === 'constant').reduce((s, i) => s + i.value, 0);
+
+  const leftMass = leftXCount * hiddenXValue + leftConstTotal;
+  const rightMass = rightXCount * hiddenXValue + rightConstTotal;
+  const diff = leftMass - rightMass;
+  const isBalanced = leftMass === rightMass && (leftItems.length > 0 || rightItems.length > 0);
+
+  // Formül gösterimleri
+  const formatItems = (xCount: number, constTotal: number, items: FreeScaleItem[]): string => {
+    if (items.length === 0) return '0';
+    const parts: string[] = [];
+    if (xCount > 0) {
+      parts.push(xCount === 1 ? 'x' : `${xCount}x`);
+    }
+    // Tek tek ağırlıkları listele veya toplamı göster
+    const consts = items.filter(i => i.type === 'constant');
+    if (consts.length > 0) {
+      parts.push(consts.map(c => `${c.value}`).join(' + '));
+    }
+    return parts.join(' + ');
+  };
+
+  const leftFormula = formatItems(leftXCount, leftConstTotal, leftItems);
+  const rightFormula = formatItems(rightXCount, rightConstTotal, rightItems);
+
+  let equationDisplay = `${leftFormula} ${isBalanced ? '=' : diff > 0 ? '>' : '<'} ${rightFormula}`;
+
+  // Eğer dengede ve x tek tarafta yalnız veya çözülebilir durumdaysa
+  let discoveredX: number | undefined;
+  if (isBalanced) {
+    if (leftXCount === 1 && rightXCount === 0 && leftConstTotal === 0) {
+      discoveredX = rightConstTotal;
+    } else if (rightXCount === 1 && leftXCount === 0 && rightConstTotal === 0) {
+      discoveredX = leftConstTotal;
+    } else if (leftXCount !== rightXCount) {
+      const netX = leftXCount - rightXCount;
+      const netConst = rightConstTotal - leftConstTotal;
+      if (netConst % netX === 0) {
+        discoveredX = netConst / netX;
+      }
+    }
+  }
+
+  return {
+    leftMass,
+    rightMass,
+    diff,
+    isBalanced,
+    leftFormula,
+    rightFormula,
+    equationDisplay,
+    discoveredX,
+  };
+}
+

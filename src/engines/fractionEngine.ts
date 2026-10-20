@@ -628,4 +628,197 @@ export function getGridDimensions(denominator: number): { rows: number; cols: nu
   }
 }
 
+/** 4 Çalışma Alanı İçin Eğitimsel Görevler & Kademeli İpuçları */
+
+export interface AreaTask {
+  id: string;
+  type: 'circle' | 'bars' | 'numberline' | 'operations';
+  title: string;
+  instruction: string;
+  targetFraction: Fraction;
+  secondaryFraction?: Fraction;
+  operation?: 'add' | 'subtract';
+  allowedDenominators?: number[];
+  maxRange?: number;
+  hint1: string; // Düşündürücü Soru
+  hint2: string; // Görsel Yönlendirme
+  hint3: string; // Adım Adım Çözüm
+}
+
+export function generateCircleTask(difficulty: 'kolay' | 'orta' | 'zor'): AreaTask {
+  const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
+  let den = 4;
+  let num = 3;
+
+  if (difficulty === 'kolay') {
+    const dens = [2, 3, 4];
+    den = dens[rand(0, dens.length - 1)];
+    num = rand(1, den - 1);
+  } else if (difficulty === 'orta') {
+    const dens = [5, 6, 8];
+    den = dens[rand(0, dens.length - 1)];
+    num = rand(1, den - 1);
+  } else {
+    const dens = [8, 10, 12];
+    den = dens[rand(0, dens.length - 1)];
+    num = rand(1, den - 1);
+  }
+
+  const target = fraction(num, den);
+  const targetStr = fractionToString(target);
+
+  return {
+    id: `circle-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    type: 'circle',
+    title: 'Daire Modeli ile Kesir İnşa Et',
+    instruction: `Daireyi uygun eş parçalara böl ve tam ${targetStr} kesrini oluşturacak kadar parçayı boya.`,
+    targetFraction: target,
+    allowedDenominators: [2, 3, 4, 5, 6, 8, 12],
+    hint1: `Bütünün kaç eş parçaya ayrılması gerektiğini (payda) ve bunlardan kaç tanesinin seçileceğini (pay) düşün.`,
+    hint2: `Dairenin paydasını ${target.denominator} yap ve ${target.numerator} adet dilimi boya.`,
+    hint3: `Paydayı ${target.denominator} olarak seç, ardından daire üzerindeki ${target.numerator} dilime tıkla.`,
+  };
+}
+
+export function generateBarTask(difficulty: 'kolay' | 'orta' | 'zor'): AreaTask {
+  // Denk kesir karşılaştırma görevi
+  let f1 = fraction(1, 2);
+  let f2 = fraction(2, 4);
+
+  if (difficulty === 'kolay') {
+    f1 = fraction(1, 2);
+    f2 = fraction(2, 4);
+  } else if (difficulty === 'orta') {
+    const pairs = [
+      { a: fraction(1, 3), b: fraction(2, 6) },
+      { a: fraction(2, 3), b: fraction(4, 6) },
+      { a: fraction(3, 4), b: fraction(6, 8) },
+    ];
+    const chosen = pairs[Math.floor(Math.random() * pairs.length)];
+    f1 = chosen.a;
+    f2 = chosen.b;
+  } else {
+    const pairs = [
+      { a: fraction(1, 4), b: fraction(3, 12) },
+      { a: fraction(2, 5), b: fraction(4, 10) },
+      { a: fraction(5, 6), b: fraction(10, 12) },
+    ];
+    const chosen = pairs[Math.floor(Math.random() * pairs.length)];
+    f1 = chosen.a;
+    f2 = chosen.b;
+  }
+
+  return {
+    id: `bar-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    type: 'bars',
+    title: 'Kesir Çubukları ile Denklik İspatı',
+    instruction: `${fractionToString(f1)} ile ${fractionToString(f2)} kesirlerinin boyalı alanlarının eşit uzunlukta olduğunu çubukları hizalayarak göster.`,
+    targetFraction: f1,
+    secondaryFraction: f2,
+    hint1: `İki çubuğun aynı referans bütünü temsil ettiğini hatırla. Parça boyutları farklı olsa da toplam uzunlukları aynı mı?`,
+    hint2: `${f1.denominator}'lik çubuktan ${f1.numerator} parça ile ${f2.denominator}'lik çubuktan ${f2.numerator} parçayı yan yana getir.`,
+    hint3: `Üstteki çubukta ${fractionToString(f1)}, alttaki çubukta ${fractionToString(f2)} oluşturduğunda boyalı şeritlerin tam aynı hizada bittiğini göreceksin.`,
+  };
+}
+
+export function generateNumberLineTask(difficulty: 'kolay' | 'orta' | 'zor'): AreaTask {
+  let den = 4;
+  let num = 3;
+  let maxRange = 1;
+
+  if (difficulty === 'kolay') {
+    const items = [{ n: 1, d: 2 }, { n: 1, d: 4 }, { n: 3, d: 4 }];
+    const chosen = items[Math.floor(Math.random() * items.length)];
+    den = chosen.d;
+    num = chosen.n;
+    maxRange = 1;
+  } else if (difficulty === 'orta') {
+    const items = [{ n: 2, d: 3 }, { n: 3, d: 5 }, { n: 5, d: 8 }, { n: 4, d: 6 }];
+    const chosen = items[Math.floor(Math.random() * items.length)];
+    den = chosen.d;
+    num = chosen.n;
+    maxRange = 1;
+  } else {
+    // Bileşik kesirler (0 - 2 aralığı)
+    const items = [{ n: 5, d: 4 }, { n: 4, d: 3 }, { n: 7, d: 4 }, { n: 3, d: 2 }];
+    const chosen = items[Math.floor(Math.random() * items.length)];
+    den = chosen.d;
+    num = chosen.n;
+    maxRange = 2;
+  }
+
+  const target = fraction(num, den);
+  const targetStr = fractionToString(target);
+
+  return {
+    id: `nl-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    type: 'numberline',
+    title: 'Sayı Doğrusunda Kesir Konumlandırma',
+    instruction: `${targetStr} kesrini sayı doğrusu üzerindeki doğru çentiğe sürükle veya tıkla.`,
+    targetFraction: target,
+    maxRange,
+    hint1: `Sayı doğrusunda 0 ile ${maxRange} arası payda kadar eş bölmeye ayrılmıştır. 0'dan başlayarak kaç adım zıplaman gerekir?`,
+    hint2: `Her aralık 1/${den} birimdir. 0'dan sağa doğru tam ${num} aralık ilerle.`,
+    hint3: `İşaretçiyi ${num}/${den} konumundaki çentiğe bırak. Sayı değeri yaklaşık ${(num / den).toFixed(2)}'dir.`,
+  };
+}
+
+export function generateOperationsTask(difficulty: 'kolay' | 'orta' | 'zor'): AreaTask {
+  let a = fraction(1, 4);
+  let b = fraction(2, 4);
+  let op: 'add' | 'subtract' = 'add';
+
+  if (difficulty === 'kolay') {
+    // Aynı paydalı toplama
+    const items = [
+      { a: fraction(1, 4), b: fraction(2, 4), op: 'add' as const },
+      { a: fraction(1, 5), b: fraction(3, 5), op: 'add' as const },
+      { a: fraction(2, 6), b: fraction(3, 6), op: 'add' as const },
+    ];
+    const chosen = items[Math.floor(Math.random() * items.length)];
+    a = chosen.a;
+    b = chosen.b;
+    op = chosen.op;
+  } else if (difficulty === 'orta') {
+    // Farklı paydalı basit toplama (1/2 + 1/4)
+    const items = [
+      { a: fraction(1, 2), b: fraction(1, 4), op: 'add' as const },
+      { a: fraction(1, 3), b: fraction(1, 6), op: 'add' as const },
+      { a: fraction(3, 4), b: fraction(1, 2), op: 'subtract' as const },
+    ];
+    const chosen = items[Math.floor(Math.random() * items.length)];
+    a = chosen.a;
+    b = chosen.b;
+    op = chosen.op;
+  } else {
+    // Farklı paydalı gelişmiş toplama ve çıkarma
+    const items = [
+      { a: fraction(2, 3), b: fraction(1, 4), op: 'add' as const },
+      { a: fraction(3, 5), b: fraction(1, 2), op: 'subtract' as const },
+      { a: fraction(5, 6), b: fraction(1, 3), op: 'subtract' as const },
+    ];
+    const chosen = items[Math.floor(Math.random() * items.length)];
+    a = chosen.a;
+    b = chosen.b;
+    op = chosen.op;
+  }
+
+  const opSymbol = op === 'add' ? '+' : '−';
+  const res = op === 'add' ? add(a, b) : subtract(a, b);
+
+  return {
+    id: `ops-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    type: 'operations',
+    title: 'Fiziksel Parçalarla Kesir İşlemleri',
+    instruction: `${fractionToString(a)} ${opSymbol} ${fractionToString(b)} işlemini modelleri birleştirerek gerçekleştir.`,
+    targetFraction: res,
+    secondaryFraction: b,
+    operation: op,
+    hint1: `Paydaları farklı olan kesirlerin dilimleri eşit büyüklükte değildir. Önce parçaları aynı boyuta (ortak paydaya) getirmelisin!`,
+    hint2: `Paydaları ${a.denominator} ve ${b.denominator} olan kesirler için EKOK'u (${lcm(a.denominator, b.denominator)}) kullanarak dilimleri alt parçalara böl.`,
+    hint3: `${fractionToString(a)} = ${fractionToString(fraction(a.numerator * (lcm(a.denominator, b.denominator) / a.denominator), lcm(a.denominator, b.denominator)))} olarak genişletilir. Sonra payları topla/çıkar: Sonuç = ${fractionToString(res)}.`,
+  };
+}
+
+
 

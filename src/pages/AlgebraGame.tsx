@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAppStore } from '../store/gameStore';
 import BalanceScale3D, { PanItem, decomposeConstantToWeights } from '../components/BalanceScale3D';
@@ -11,1229 +11,858 @@ import {
   validateStudentAnswer,
   formatSide,
   applyOperation,
-  calculateTiltAngle,
   getRecommendedOperations,
   getEquationStage,
+  getProgressiveHints,
+  ProgressiveHint,
+  evaluateFreeScale,
+  FreeScaleItem,
   QuickAction,
 } from '../engines/algebraEngine';
 
-function fractionToString(f: { numerator: number; denominator: number }): string {
-  if (f.denominator === 1) return `${f.numerator}`;
-  return `${f.numerator}/${f.denominator}`;
-}
-
 type Difficulty = 'kolay' | 'orta' | 'zor';
-type GameMode = 'zen' | 'rush';
+type PlayMode = 'free' | 'equation';
 
-interface GameState {
-  equation: Equation;
+interface ConceptStats {
+  equalityBalance: number;       // Eşitlik ve Denge
+  isolation: number;             // Bilinmeyeni Yalnız Bırakma
+  equivalencePrinciple: number;  // Denklemin İki Tarafına Aynı İşlemi Uygulama
+  inverseOperations: number;     // Ters İşlemler (Toplama-Çıkarma, vb.)
+  multiStepLinear: number;       // Çok Adımlı Doğrusal Çözüm
+}
+
+interface ActionHistorySnapshot {
   currentEq: Equation;
-  solved: boolean;
+  leftItems: PanItem[];
+  rightItems: PanItem[];
   steps: string[];
-  hintsUsed: number;
-  startTime: number;
-  score: number;
-}
-
-interface SparkleParticle {
-  id: number;
-  x: number;
-  y: number;
-  symbol: string;
-  color: string;
-}
-
-function OperationPanel({
-  onApply,
-  disabled,
-}: {
-  onApply: (type: 'add' | 'subtract' | 'multiply' | 'divide', value: number, isVariable?: boolean) => void;
-  disabled: boolean;
-}) {
-  const [opType, setOpType] = useState<'add' | 'subtract' | 'multiply' | 'divide'>('subtract');
-  const [isVariable, setIsVariable] = useState(false);
-  const [value, setValue] = useState(1);
-  const [inputVal, setInputVal] = useState('1');
-
-  const ops = [
-    { type: 'add' as const, label: '+ Ekle', symbol: '+' },
-    { type: 'subtract' as const, label: '− Çıkar', symbol: '−' },
-    { type: 'multiply' as const, label: '× Çarp', symbol: '×' },
-    { type: 'divide' as const, label: '÷ Böl', symbol: '÷' },
-  ];
-
-  return (
-    <div className="space-y-3">
-      {/* İşlem seçici (Siyah-Beyaz Çizim Butonları) */}
-      <div className="grid grid-cols-4 gap-1.5">
-        {ops.map(op => {
-          const isSelected = opType === op.type;
-          return (
-            <button
-              key={op.type}
-              type="button"
-              onClick={() => setOpType(op.type)}
-              className={`py-1.5 px-2 rounded-xl text-xs font-bold border-2 border-zinc-900 transition-all ${
-                isSelected
-                  ? 'bg-zinc-900 text-white shadow-[2px_2px_0px_#18181b]'
-                  : 'bg-white text-zinc-900 hover:bg-zinc-100 shadow-[1px_1px_0px_#18181b]'
-              }`}
-            >
-              {op.symbol} {op.label.split(' ')[1]}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Terim Tipi (Sabit Sayı vs x'li Terim) */}
-      {(opType === 'add' || opType === 'subtract') && (
-        <div className="flex items-center gap-2 p-1 bg-zinc-100 rounded-xl border-2 border-zinc-900">
-          <button
-            type="button"
-            onClick={() => setIsVariable(false)}
-            className={`flex-1 py-1 rounded-lg text-xs font-bold transition-all ${
-              !isVariable ? 'bg-zinc-900 text-white shadow' : 'text-zinc-600 hover:text-zinc-900'
-            }`}
-          >
-            🔢 Sayı ({value})
-          </button>
-          <button
-            type="button"
-            onClick={() => setIsVariable(true)}
-            className={`flex-1 py-1 rounded-lg text-xs font-bold transition-all ${
-              isVariable ? 'bg-zinc-900 text-white shadow' : 'text-zinc-600 hover:text-zinc-900'
-            }`}
-          >
-            📦 x Terimi ({value === 1 ? 'x' : `${value}x`})
-          </button>
-        </div>
-      )}
-
-      {/* Değer girişi & Uygula */}
-      <div className="flex items-center gap-2">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => {
-              const v = Math.max(1, value - 1);
-              setValue(v);
-              setInputVal(String(v));
-            }}
-            className="w-8 h-8 rounded-lg border-2 border-zinc-900 bg-white flex items-center justify-center text-sm font-bold hover:bg-zinc-100 active:scale-95 shadow-[1px_1px_0px_#18181b]"
-          >
-            −
-          </button>
-
-          <input
-            type="number"
-            value={inputVal}
-            onChange={e => {
-              setInputVal(e.target.value);
-              const n = parseFloat(e.target.value);
-              if (!isNaN(n)) setValue(Math.max(1, n));
-            }}
-            className="w-14 text-center py-1 rounded-lg font-mono font-bold text-xs text-zinc-900 bg-white border-2 border-zinc-900 outline-none"
-            min={1}
-            max={99}
-          />
-
-          <button
-            type="button"
-            onClick={() => {
-              const v = value + 1;
-              setValue(v);
-              setInputVal(String(v));
-            }}
-            className="w-8 h-8 rounded-lg border-2 border-zinc-900 bg-white flex items-center justify-center text-sm font-bold hover:bg-zinc-100 active:scale-95 shadow-[1px_1px_0px_#18181b]"
-          >
-            +
-          </button>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => onApply(opType, value, isVariable)}
-          disabled={disabled || value === 0}
-          className="flex-1 py-1.5 rounded-xl text-xs font-bold bg-zinc-900 text-white border-2 border-zinc-900 shadow-[2px_2px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px] transition-all disabled:opacity-50"
-        >
-          Her İki Kefeye {opType === 'add' ? '+' : opType === 'subtract' ? '−' : opType === 'multiply' ? '×' : '÷'}
-          {isVariable ? (value === 1 ? ' x' : ` ${value}x`) : ` ${value}`}
-        </button>
-      </div>
-    </div>
-  );
+  description: string;
 }
 
 export default function AlgebraGame() {
   const { setCurrentGame, recordGameResult, playSound } = useAppStore();
+
+  // Ana Mod Seçimi (Mod A: Serbest Terazi vs Mod B: Denklem Çözme)
+  const [playMode, setPlayMode] = useState<PlayMode>('equation');
   const [difficulty, setDifficulty] = useState<Difficulty>('kolay');
-  const [gameMode, setGameMode] = useState<GameMode>('zen');
+  const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
 
-  // Rush modu durumları
-  const [timeLeft, setTimeLeft] = useState(60);
-  const [streak, setStreak] = useState(0);
-  const [highScore, setHighScore] = useState(() => {
-    return parseInt(localStorage.getItem('cebir_rush_highscore') || '0', 10);
-  });
-  const [isRushGameOver, setIsRushGameOver] = useState(false);
-
-  const [gameState, setGameState] = useState<GameState>(() => {
-    const eq = generateEquation('kolay');
-    return {
-      equation: eq,
-      currentEq: eq,
-      solved: false,
-      steps: [equationToString(eq)],
-      hintsUsed: 0,
-      startTime: Date.now(),
-      score: 0,
-    };
-  });
-
+  // MOD B: Denklem Çözme Durumu
+  const [equation, setEquation] = useState<Equation>(() => generateEquation('kolay'));
+  const [currentEq, setCurrentEq] = useState<Equation>(equation);
+  const [solved, setSolved] = useState(false);
+  const [steps, setSteps] = useState<string[]>([]);
+  const [history, setHistory] = useState<ActionHistorySnapshot[]>([]);
   const [studentAnswer, setStudentAnswer] = useState('');
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'hint' | 'info'; message: string } | null>(null);
-  const [showSolution, setShowSolution] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
-  const [showManualOps, setShowManualOps] = useState(false);
-  const [problemsSolved, setProblemsSolved] = useState(0);
-  const [sparkles, setSparkles] = useState<SparkleParticle[]>([]);
-  const [tiltAngle, setTiltAngle] = useState(0);
+
+  // MOD A: Serbest Terazi Durumu
+  const [freeLeftItems, setFreeLeftItems] = useState<FreeScaleItem[]>([
+    { id: 'free-l-1', type: 'constant', value: 3, label: '3' },
+    { id: 'free-l-2', type: 'constant', value: 4, label: '4' },
+  ]);
+  const [freeRightItems, setFreeRightItems] = useState<FreeScaleItem[]>([
+    { id: 'free-r-1', type: 'constant', value: 7, label: '7' },
+  ]);
+  const [freeHiddenX, setFreeHiddenX] = useState<number>(4);
+
+  // 3 Aşamalı İpucu Sistemi & Modallar
+  const [hintLevel, setHintLevel] = useState<number>(0);
+  const [showHintModal, setShowHintModal] = useState(false);
+  const [showRulesModal, setShowRulesModal] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [showSolutionSteps, setShowSolutionSteps] = useState(false);
+
+  // Sürükle-Bırak Durumu
+  const [draggedItem, setDraggedItem] = useState<{ type: 'x' | 'constant'; value: number } | null>(null);
+  const [hoveredPan, setHoveredPan] = useState<'left' | 'right' | null>(null);
+
+  // Dinamik Terazi Eğim ve Salınım
   const [isTilting, setIsTilting] = useState(false);
-  const [tiltStatus, setTiltStatus] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<'3d' | '2d'>('3d');
-  const [opMode, setOpMode] = useState<'balanced' | 'free'>('balanced');
-  const [floatingTokens, setFloatingTokens] = useState<
-    Array<{
-      id: number;
-      side: 'left' | 'right';
-      text: string;
-      type: 'add' | 'subtract' | 'multiply' | 'divide';
-    }>
-  >([]);
+  const [manualTiltAngle, setManualTiltAngle] = useState(0);
 
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const tiltTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const tiltSecondTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // Öğrenme İlerlemesi & İstatistikler
+  const [stats, setStats] = useState({
+    tasksCompleted: 0,
+    correctAttempts: 0,
+    wrongAttempts: 0,
+    hintsUsed: 0,
+    startTime: Date.now(),
+  });
+  const [concepts, setConcepts] = useState<ConceptStats>({
+    equalityBalance: 0,
+    isolation: 0,
+    equivalencePrinciple: 0,
+    inverseOperations: 0,
+    multiStepLinear: 0,
+  });
 
-  const triggerSparkles = useCallback(() => {
-    const symbols = ['✦', '★', '⚖️', 'x', '✓', '✨'];
-    const colors = ['#2563eb', '#f59e0b', '#059669', '#18181b'];
-    const newSparkles: SparkleParticle[] = Array.from({ length: 14 }, (_, i) => ({
-      id: Date.now() + i,
-      x: (Math.random() - 0.5) * 260,
-      y: -Math.random() * 120 - 20,
-      symbol: symbols[Math.floor(Math.random() * symbols.length)],
-      color: colors[Math.floor(Math.random() * colors.length)],
-    }));
-    setSparkles(newSparkles);
-    setTimeout(() => setSparkles([]), 1600);
-  }, []);
+  const tiltTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const startNewGame = useCallback(() => {
-    const eq = generateEquation(difficulty);
-    setGameState({
-      equation: eq,
-      currentEq: eq,
-      solved: false,
-      steps: [equationToString(eq)],
-      hintsUsed: 0,
-      startTime: Date.now(),
-      score: 0,
-    });
+  // Gerçek x Çözüm Değeri (Sistemde gizli saklanır, fizik hesabında kullanılır)
+  const trueSolution = useMemo(() => {
+    try {
+      const sol = solveLinearEquation(equation);
+      return sol.numerator / sol.denominator;
+    } catch {
+      return 4;
+    }
+  }, [equation]);
+
+  // Yeni Denklem Başlatma
+  const startNewProblem = useCallback((diff: Difficulty = difficulty) => {
+    const newEq = generateEquation(diff);
+    setEquation(newEq);
+    setCurrentEq(newEq);
+    setSolved(false);
+    setSteps([equationToString(newEq)]);
+    setHistory([]);
     setStudentAnswer('');
     setFeedback(null);
-    setShowSolution(false);
-    setTiltAngle(0);
+    setHintLevel(0);
+    setShowSolutionSteps(false);
+    setManualTiltAngle(0);
     setIsTilting(false);
-    setTiltStatus(null);
-    setFloatingTokens([]);
     if (tiltTimerRef.current) clearTimeout(tiltTimerRef.current);
-    if (tiltSecondTimerRef.current) clearTimeout(tiltSecondTimerRef.current);
   }, [difficulty]);
 
-  // Zorluk değiştiğinde yeni oyun
   useEffect(() => {
-    startNewGame();
-    return () => {
-      if (tiltTimerRef.current) clearTimeout(tiltTimerRef.current);
-      if (tiltSecondTimerRef.current) clearTimeout(tiltSecondTimerRef.current);
-    };
-  }, [startNewGame]);
+    startNewProblem(difficulty);
+  }, [difficulty, startNewProblem]);
 
-  // Rush Modu Zaman Sayacı
-  useEffect(() => {
-    if (gameMode !== 'rush' || isRushGameOver) {
-      if (timerRef.current) clearInterval(timerRef.current);
-      return;
-    }
-
-    timerRef.current = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev <= 1) {
-          clearInterval(timerRef.current!);
-          setIsRushGameOver(true);
-          playSound('wrong');
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [gameMode, isRushGameOver, playSound]);
-
-  const restartRush = () => {
-    setTimeLeft(60);
-    setStreak(0);
-    setIsRushGameOver(false);
-    setProblemsSolved(0);
-    startNewGame();
-  };
-
-  const solution = solveLinearEquation(gameState.equation);
-  const stageInfo = getEquationStage(gameState.currentEq);
-  const recommendedOps = getRecommendedOperations(gameState.currentEq);
-
-  const solutionX = solution.denominator === 1 && solution.numerator > 0 ? solution.numerator : 3;
-  const effectiveXWeight = Math.max(1, solutionX);
-
-  const baseLeftItems = useMemo<PanItem[]>(() => {
+  // MOD B: Kefelerdeki PanItem Elemanları
+  const leftPanItems = useMemo<PanItem[]>(() => {
     const items: PanItem[] = [];
-    for (let i = 0; i < Math.max(0, gameState.currentEq.leftA); i++) {
+    for (let i = 0; i < Math.max(0, currentEq.leftA); i++) {
       items.push({ id: `l-x-${i}`, type: 'x', value: 1, label: 'x' });
     }
-    items.push(...decomposeConstantToWeights(gameState.currentEq.leftB, 'left'));
+    items.push(...decomposeConstantToWeights(currentEq.leftB, 'left'));
     return items;
-  }, [gameState.currentEq.leftA, gameState.currentEq.leftB]);
+  }, [currentEq.leftA, currentEq.leftB]);
 
-  const baseRightItems = useMemo<PanItem[]>(() => {
+  const rightPanItems = useMemo<PanItem[]>(() => {
     const items: PanItem[] = [];
-    for (let i = 0; i < Math.max(0, gameState.currentEq.rightA); i++) {
+    for (let i = 0; i < Math.max(0, currentEq.rightA); i++) {
       items.push({ id: `r-x-${i}`, type: 'x', value: 1, label: 'x' });
     }
-    items.push(...decomposeConstantToWeights(gameState.currentEq.rightB, 'right'));
+    items.push(...decomposeConstantToWeights(currentEq.rightB, 'right'));
     return items;
-  }, [gameState.currentEq.rightA, gameState.currentEq.rightB]);
+  }, [currentEq.rightA, currentEq.rightB]);
 
-  const activeLeftItems = baseLeftItems;
-  const activeRightItems = baseRightItems;
-
+  // MOD B Fiziksel Kütleler (Gizli x kütlesi dahil edilerek)
   const currentLeftMass = useMemo(() => {
-    return activeLeftItems.reduce(
-      (acc, it) => acc + (it.type === 'x' ? effectiveXWeight : it.value),
-      0
-    );
-  }, [activeLeftItems, effectiveXWeight]);
+    return leftPanItems.reduce((acc, it) => acc + (it.type === 'x' ? trueSolution : it.value), 0);
+  }, [leftPanItems, trueSolution]);
 
   const currentRightMass = useMemo(() => {
-    return activeRightItems.reduce(
-      (acc, it) => acc + (it.type === 'x' ? effectiveXWeight : it.value),
-      0
-    );
-  }, [activeRightItems, effectiveXWeight]);
+    return rightPanItems.reduce((acc, it) => acc + (it.type === 'x' ? trueSolution : it.value), 0);
+  }, [rightPanItems, trueSolution]);
 
-  // 2B SVG Modu için Dinamik Terazi Eğim Açısı
-  const effective2DTiltAngle = useMemo(() => {
-    if (isTilting) return tiltAngle;
-    const massDiff = currentLeftMass - currentRightMass;
-    if (massDiff === 0) return 0;
-    // Sol ağır (massDiff > 0) -> SVG'de negatif açı (saat yönünün tersi: Sol aşağı, Sağ yukarı)
-    // Sağ ağır (massDiff < 0) -> SVG'de pozitif açı (saat yönü: Sağ aşağı, Sol yukarı)
-    const absDiff = Math.abs(massDiff);
-    const angleMagnitude = Math.min(22, 12 + Math.min(10, absDiff * 2));
-    return massDiff > 0 ? -angleMagnitude : angleMagnitude;
-  }, [isTilting, tiltAngle, currentLeftMass, currentRightMass]);
+  // MOD A: Serbest Terazi Değerlendirmesi
+  const freeScaleEval = useMemo(() => {
+    return evaluateFreeScale(freeLeftItems, freeRightItems, freeHiddenX);
+  }, [freeLeftItems, freeRightItems, freeHiddenX]);
 
-  function addFloatingToken(
-    side: 'left' | 'right',
-    text: string,
-    type: 'add' | 'subtract' | 'multiply' | 'divide'
-  ) {
-    const id = Date.now() + Math.random();
-    setFloatingTokens(prev => [...prev, { id, side, text, type }]);
-    setTimeout(() => {
-      setFloatingTokens(prev => prev.filter(t => t.id !== id));
-    }, 1000);
-  }
+  // 2D SVG Terazi Eğim Açısı (-20° ile +20° arası)
+  const tiltAngle2D = useMemo(() => {
+    if (isTilting) return manualTiltAngle;
+    const diff = playMode === 'equation' ? currentLeftMass - currentRightMass : freeScaleEval.diff;
+    if (diff === 0) return 0;
+    // Sol kefe ağırsa (diff > 0): SVG saat yönünün tersine (-eğim: sol aşağı iner, sağ yukarı kalkar)
+    // Sağ kefe ağırsa (diff < 0): SVG saat yönünde (+eğim: sağ aşağı iner, sol yukarı kalkar)
+    const angleMag = Math.min(22, 10 + Math.min(12, Math.abs(diff) * 2));
+    return diff > 0 ? -angleMag : angleMag;
+  }, [isTilting, manualTiltAngle, playMode, currentLeftMass, currentRightMass, freeScaleEval.diff]);
 
-  function handleOperation(
-    type: 'add' | 'subtract' | 'multiply' | 'divide',
-    value: number,
-    isVar?: boolean,
-    triggerSide: 'left' | 'right' = 'left'
-  ) {
-    if (gameState.solved || (gameMode === 'rush' && isRushGameOver) || isTilting) return;
+  // Geri Al (Undo) Fonksiyonu
+  const handleUndo = useCallback(() => {
+    if (playMode === 'equation') {
+      if (history.length === 0) {
+        setFeedback({ type: 'info', message: 'Geri alınacak önceki hamle bulunmuyor.' });
+        return;
+      }
+      const last = history[history.length - 1];
+      setCurrentEq(last.currentEq);
+      setSteps(last.steps);
+      setHistory(prev => prev.slice(0, -1));
+      setSolved(false);
+      playSound('move');
+      setFeedback({ type: 'info', message: `Son hamle geri alındı: ${last.description}` });
+    } else {
+      // Serbest modda son eklenen nesneyi kaldır
+      if (freeLeftItems.length > 0) {
+        setFreeLeftItems(prev => prev.slice(0, -1));
+        playSound('move');
+      } else if (freeRightItems.length > 0) {
+        setFreeRightItems(prev => prev.slice(0, -1));
+        playSound('move');
+      }
+    }
+  }, [playMode, history, freeLeftItems, freeRightItems, playSound]);
 
-    const result = applyOperation(gameState.currentEq, {
-      type,
-      value,
-      isVariable: isVar,
-      applyTo: 'both',
+  // Sıfırla (Reset)
+  const handleReset = useCallback(() => {
+    if (playMode === 'equation') {
+      setCurrentEq(equation);
+      setSteps([equationToString(equation)]);
+      setHistory([]);
+      setSolved(false);
+      setStudentAnswer('');
+      setFeedback({ type: 'info', message: 'Denklem başlangıç dengesine sıfırlandı.' });
+    } else {
+      setFreeLeftItems([]);
+      setFreeRightItems([]);
+      setFeedback({ type: 'info', message: 'Kefeler tamamen boşaltıldı.' });
+    }
+    playSound('click');
+  }, [playMode, equation, playSound]);
+
+  // 3 Aşamalı İpucu Çağırma
+  const handleGetHint = useCallback(() => {
+    playSound('hint');
+    setHintLevel(prev => Math.min(3, prev + 1));
+    setShowHintModal(true);
+    setStats(s => ({ ...s, hintsUsed: s.hintsUsed + 1 }));
+  }, [playSound]);
+
+  // Başarı Tetikleme
+  const triggerSuccess = useCallback((resultValue: number) => {
+    playSound('win');
+    setSolved(true);
+    const timeSpent = Math.floor((Date.now() - stats.startTime) / 1000);
+    setStats(s => ({
+      ...s,
+      tasksCompleted: s.tasksCompleted + 1,
+      correctAttempts: s.correctAttempts + 1,
+    }));
+    setConcepts(c => ({
+      ...c,
+      equalityBalance: c.equalityBalance + 1,
+      isolation: c.isolation + 1,
+      equivalencePrinciple: c.equivalencePrinciple + 1,
+      inverseOperations: c.inverseOperations + 1,
+      multiStepLinear: difficulty === 'zor' ? c.multiStepLinear + 1 : c.multiStepLinear,
+    }));
+    setFeedback({
+      type: 'success',
+      message: `🎉 Tebrikler! x = ${resultValue} bulundu! Terazi mükemmel dengede ve denklem çözüldü!`,
     });
+    recordGameResult('algebra', true, 100, timeSpent);
+  }, [playSound, stats.startTime, difficulty, recordGameResult]);
 
-    if (!result.isValid) {
+  // MOD B: İki Kefeye Eşit İşlem Uygulama (Denklik İlkesi Simülasyonu)
+  const applyBalancedOperation = useCallback((
+    type: 'add' | 'subtract' | 'multiply' | 'divide',
+    val: number,
+    isVar: boolean = false
+  ) => {
+    if (solved || isTilting) return;
+
+    // Snapshot kaydet
+    setHistory(prev => [
+      ...prev,
+      {
+        currentEq,
+        leftItems: leftPanItems,
+        rightItems: rightPanItems,
+        steps,
+        description: `${type === 'subtract' ? '−' : type === 'add' ? '+' : type === 'divide' ? '÷' : '×'}${isVar ? `${val}x` : val} (Her İki Kefe)`,
+      },
+    ]);
+
+    const res = applyOperation(currentEq, { type, value: val, isVariable: isVar, applyTo: 'both' });
+    if (!res.isValid) {
       playSound('wrong');
-      setFeedback({ type: 'error', message: result.errorMessage || 'Geçersiz işlem' });
+      setFeedback({ type: 'error', message: res.errorMessage || 'Geçersiz işlem.' });
       return;
     }
 
-    const opSymbol = type === 'add' ? '+' : type === 'subtract' ? '−' : type === 'multiply' ? '×' : '÷';
-    const opLabel = `${opSymbol}${isVar ? (value === 1 ? 'x' : `${value}x`) : value}`;
+    const nextEq = res.newEq || res.newEquation;
+    const opLabel = `${type === 'add' ? '+' : type === 'subtract' ? '−' : type === 'multiply' ? '×' : '÷'}${isVar ? (val === 1 ? 'x' : `${val}x`) : val}`;
 
+    // Yumuşak fiziksel geçiş: Önce ilk kefe hareketlenir, ardından eşitlik tamamlanınca yerine oturur
     setIsTilting(true);
-
-    // ADIM 1: İlk Kefe Fiziksel Olarak Değişir (Ağır basan taraf aşağı iner, hafifleyen yukarı kalkar!)
-    let dipAngle = 0;
-    if (type === 'subtract' || type === 'divide') {
-      dipAngle = triggerSide === 'left' ? 22 : -22;
-    } else {
-      dipAngle = triggerSide === 'left' ? -22 : 22;
-    }
-
-    // 1. Kefe için ara denklem (Tek tarafa uygulandığında terazinin gerçek dengesizlik durumu)
-    const step1Eq: Equation = { ...gameState.currentEq };
-    if (triggerSide === 'left') {
-      if (type === 'subtract') {
-        if (isVar) step1Eq.leftA = Math.max(0, step1Eq.leftA - value);
-        else step1Eq.leftB = step1Eq.leftB - value;
-      } else if (type === 'add') {
-        if (isVar) step1Eq.leftA = step1Eq.leftA + value;
-        else step1Eq.leftB = step1Eq.leftB + value;
-      } else if (type === 'divide') {
-        step1Eq.leftA = step1Eq.leftA / value;
-        step1Eq.leftB = step1Eq.leftB / value;
-      } else if (type === 'multiply') {
-        step1Eq.leftA = step1Eq.leftA * value;
-        step1Eq.leftB = step1Eq.leftB * value;
-      }
-    } else {
-      if (type === 'subtract') {
-        if (isVar) step1Eq.rightA = Math.max(0, step1Eq.rightA - value);
-        else step1Eq.rightB = step1Eq.rightB - value;
-      } else if (type === 'add') {
-        if (isVar) step1Eq.rightA = step1Eq.rightA + value;
-        else step1Eq.rightB = step1Eq.rightB + value;
-      } else if (type === 'divide') {
-        step1Eq.rightA = step1Eq.rightA / value;
-        step1Eq.rightB = step1Eq.rightB / value;
-      } else if (type === 'multiply') {
-        step1Eq.rightA = step1Eq.rightA * value;
-        step1Eq.rightB = step1Eq.rightB * value;
-      }
-    }
-
-    // Hemen 1. kefeyi güncelle (kefedeki nesneler ve kütle fiziksel olarak değişir)
-    setGameState(prev => ({
-      ...prev,
-      currentEq: step1Eq,
-    }));
-
+    setManualTiltAngle(type === 'subtract' ? 14 : -14);
     playSound('move');
-    addFloatingToken(triggerSide, opLabel, type);
-    setTiltAngle(dipAngle);
-    const actionDesc =
-      type === 'subtract' || type === 'divide'
-        ? `${triggerSide === 'left' ? 'Sol' : 'Sağ'} kefe hafifledi (Yukarı Kalktı ↗) — Karşı kefe ağır basıyor ↘`
-        : `${triggerSide === 'left' ? 'Sol' : 'Sağ'} kefe ağırlaştı (Aşağı Çöktü ↘)`;
-    setTiltStatus(actionDesc);
 
-    // ADIM 2 (650ms sonra): İkinci kefe de aynı işlemi alır, terazi dengeye doğru salınır
     tiltTimerRef.current = setTimeout(() => {
-      const otherSide = triggerSide === 'left' ? 'right' : 'left';
-      addFloatingToken(otherSide, opLabel, type);
-      playSound('move');
+      setManualTiltAngle(0);
+      setCurrentEq(nextEq);
+      setSteps(prev => [...prev, equationToString(nextEq)]);
 
-      // Karşı kefe eşitlenir, terazi spring ile salınarak 0'a gelir
-      setTiltAngle(0);
-      setTiltStatus('Karşı kefe eşitleniyor, denge kuruluyor...');
-
-      const updatedEq = result.newEq || result.newEquation;
-      const newSteps = [...gameState.steps, equationToString(updatedEq)];
-
-      setGameState(prev => ({
-        ...prev,
-        currentEq: updatedEq,
-        steps: newSteps,
-      }));
-
-      // ADIM 3 (550ms sonra): Denge tamamen yerine oturur
-      tiltSecondTimerRef.current = setTimeout(() => {
+      setTimeout(() => {
         setIsTilting(false);
-        setTiltStatus(null);
         playSound('click');
 
         // Otomatik izolasyon kontrolü
-        const newStage = getEquationStage(updatedEq);
-        if (newStage.isIsolated && newStage.isolatedValue !== undefined) {
-          const correctVal = solution.numerator / solution.denominator;
-          if (Math.abs(newStage.isolatedValue - correctVal) < 1e-10) {
-            handleSolvedSuccess(newStage.isolatedValue);
-            return;
-          }
+        const stage = getEquationStage(nextEq);
+        if (stage.isIsolated && stage.isolatedValue !== undefined) {
+          triggerSuccess(stage.isolatedValue);
+        } else {
+          setFeedback({
+            type: 'info',
+            message: `Denklik korundu: Her iki kefeye ${opLabel} uygulandı. Terazi yatay dengede ✓`,
+          });
         }
+      }, 350);
+    }, 450);
+  }, [solved, isTilting, currentEq, leftPanItems, rightPanItems, steps, playSound, triggerSuccess]);
 
-        setFeedback({
-          type: 'info',
-          message: `${opLabel} her iki kefeye uygulandı: Terazi tekrar tam dengede ✓`,
-        });
-      }, 550);
-    }, 650);
-  }
+  // MOD B: Tek Kefeden Nesne Çıkarma (Denge Bozulmasının Öğretici Görsel Kanıtı)
+  const handleRemoveItem = useCallback((side: 'left' | 'right', item: PanItem) => {
+    if (solved || isTilting) return;
 
-  function handleSolvedSuccess(val: number) {
-    playSound('win');
-    triggerSparkles();
+    // Snapshot
+    setHistory(prev => [
+      ...prev,
+      {
+        currentEq,
+        leftItems: leftPanItems,
+        rightItems: rightPanItems,
+        steps,
+        description: `${side === 'left' ? 'Sol' : 'Sağ'} kefeden ${item.label} çıkarıldı`,
+      },
+    ]);
 
-    const elapsed = Math.floor((Date.now() - gameState.startTime) / 1000);
-    const basePoints = Math.max(20, 100 - gameState.hintsUsed * 20 - Math.floor(elapsed / 8));
-    const streakBonus = streak * 15;
-    const totalPoints = basePoints + streakBonus;
+    const isLeft = side === 'left';
+    const nextEq: Equation = { ...currentEq };
 
-    setGameState(prev => ({ ...prev, solved: true, score: totalPoints }));
-    setProblemsSolved(n => n + 1);
-
-    if (gameMode === 'rush') {
-      const nextStreak = streak + 1;
-      setStreak(nextStreak);
-      setTimeLeft(t => Math.min(90, t + 10)); // +10 sn bonus süre
-
-      const newScore = (problemsSolved + 1) * 100 + nextStreak * 50;
-      if (newScore > highScore) {
-        setHighScore(newScore);
-        localStorage.setItem('cebir_rush_highscore', String(newScore));
-      }
+    if (item.type === 'x') {
+      if (isLeft) nextEq.leftA = Math.max(0, nextEq.leftA - 1);
+      else nextEq.rightA = Math.max(0, nextEq.rightA - 1);
+    } else {
+      if (isLeft) nextEq.leftB = nextEq.leftB - item.value;
+      else nextEq.rightB = nextEq.rightB - item.value;
     }
 
-    setFeedback({
-      type: 'success',
-      message: `Tebrikler! x = ${val} bulundu! Terazi mükemmel dengede ✓`,
-    });
+    setCurrentEq(nextEq);
+    playSound('move');
 
-    recordGameResult('algebra', true, totalPoints, elapsed);
-  }
+    // Denge bozuldu uyarısı ve eğitimsel geri bildirim
+    const isNowBalanced = (nextEq.leftA * trueSolution + nextEq.leftB) === (nextEq.rightA * trueSolution + nextEq.rightB);
+    if (!isNowBalanced) {
+      playSound('wrong');
+      setStats(s => ({ ...s, wrongAttempts: s.wrongAttempts + 1 }));
+      setFeedback({
+        type: 'error',
+        message: `⚠️ Denge Bozuldu! ${side === 'left' ? 'Sol' : 'Sağ'} kefeden ${item.label} kaldırdın ama karşı kefeye dokunmadın. Terazinin yeniden yatay konuma gelmesi için karşı kefeden de ${item.label} kaldırmalısın!`,
+      });
+    } else {
+      setFeedback({
+        type: 'success',
+        message: `✓ Harika! Her iki kefe eşitlendi ve denge sağlandı!`,
+      });
+      const stage = getEquationStage(nextEq);
+      if (stage.isIsolated && stage.isolatedValue !== undefined) {
+        triggerSuccess(stage.isolatedValue);
+      }
+    }
+  }, [solved, isTilting, currentEq, leftPanItems, rightPanItems, steps, playSound, trueSolution, triggerSuccess]);
 
-  function handleCheckAnswer() {
-    if (gameState.solved || !studentAnswer || (gameMode === 'rush' && isRushGameOver)) return;
+  // Sürükle ve Bırak (Drag & Drop) Olayları
+  const handleDragStart = (type: 'x' | 'constant', value: number) => {
+    setDraggedItem({ type, value });
+  };
+
+  const handleDropOnPan = (side: 'left' | 'right') => {
+    if (!draggedItem) return;
+    setHoveredPan(null);
+
+    if (playMode === 'free') {
+      const newItem: FreeScaleItem = {
+        id: `free-${side}-${Date.now()}-${Math.random()}`,
+        type: draggedItem.type,
+        value: draggedItem.value,
+        label: draggedItem.type === 'x' ? 'x' : `${draggedItem.value}`,
+      };
+      if (side === 'left') {
+        setFreeLeftItems(prev => [...prev, newItem]);
+      } else {
+        setFreeRightItems(prev => [...prev, newItem]);
+      }
+      playSound('click');
+    } else {
+      // Denklem çözme modunda kefeye ağırlık ekleme
+      const isLeft = side === 'left';
+      const nextEq = { ...currentEq };
+      if (draggedItem.type === 'x') {
+        if (isLeft) nextEq.leftA += 1;
+        else nextEq.rightA += 1;
+      } else {
+        if (isLeft) nextEq.leftB += draggedItem.value;
+        else nextEq.rightB += draggedItem.value;
+      }
+      setCurrentEq(nextEq);
+      playSound('click');
+      setFeedback({
+        type: 'info',
+        message: `${side === 'left' ? 'Sol' : 'Sağ'} kefeye ${draggedItem.type === 'x' ? '1x' : draggedItem.value} eklendi.`,
+      });
+    }
+    setDraggedItem(null);
+  };
+
+  // Serbest Kefe Nesnesini Kaldırma
+  const handleRemoveFreeItem = (side: 'left' | 'right', id: string) => {
+    if (side === 'left') {
+      setFreeLeftItems(prev => prev.filter(i => i.id !== id));
+    } else {
+      setFreeRightItems(prev => prev.filter(i => i.id !== id));
+    }
+    playSound('move');
+  };
+
+  // Cevap Doğrulama (Doğrudan sayı girişi)
+  const handleCheckAnswer = () => {
+    if (!studentAnswer || solved) return;
     const num = parseFloat(studentAnswer);
     if (isNaN(num)) return;
 
-    const validation = validateStudentAnswer(gameState.equation, num);
-
-    if (validation.isCorrect) {
-      handleSolvedSuccess(num);
+    const val = validateStudentAnswer(equation, num);
+    if (val.isCorrect) {
+      triggerSuccess(num);
     } else {
       playSound('wrong');
-      if (gameMode === 'rush') {
-        setStreak(0);
-        setTimeLeft(t => Math.max(5, t - 5)); // -5 sn hata cezası
-      }
-      setFeedback({
-        type: 'error',
-        message: validation.explanation,
-      });
-    }
-  }
-
-  function handleHint() {
-    playSound('hint');
-    const steps = generateSolutionSteps(gameState.currentEq);
-    if (steps.length > 0) {
-      const hint = steps[0].description;
-      setGameState(prev => ({ ...prev, hintsUsed: prev.hintsUsed + 1 }));
-      setFeedback({ type: 'hint', message: `💡 İpucu: ${hint}` });
-    }
-  }
-
-  const leftStr = formatSide(gameState.currentEq.leftA, gameState.currentEq.leftB);
-  const rightStr = formatSide(gameState.currentEq.rightA, gameState.currentEq.rightB);
-
-  // Kefeden Nesne Alma (Kaldırma / Eksiltme)
-  const handleRemoveItem = (side: 'left' | 'right', type: 'x' | 'constant', value: number) => {
-    if (gameState.solved || (gameMode === 'rush' && isRushGameOver) || isTilting) return;
-
-    if (opMode === 'balanced') {
-      // ⚡ Akıllı Denge Modu: Cebirsel denklik korunarak her iki kefeden eşit miktarda eksiltilir
-      if (type === 'x') {
-        const canSubtract = gameState.currentEq.leftA >= 1 && gameState.currentEq.rightA >= 1;
-        if (canSubtract) {
-          handleOperation('subtract', 1, true, side);
-        } else {
-          playSound('wrong');
-          setFeedback({
-            type: 'info',
-            message: `Karşı kefede x kutusu kalmadığı için x çıkarılamaz. Hedef x'i yalnız bırakmak!`,
-          });
-        }
-      } else {
-        // Sabit sayı işlemi: Negatif sabit terimi nötrleme veya pozitif eksiltme
-        if (value < 0) {
-          // Negatif terimi nötrleme: Her iki kefeye mutlak değeri kadar ekle
-          const addVal = Math.abs(value);
-          handleOperation('add', addVal, false, side);
-          return;
-        }
-
-        // Pozitif sabit sayı eksiltme
-        const currentThisB = side === 'left' ? gameState.currentEq.leftB : gameState.currentEq.rightB;
-        const currentOtherB = side === 'left' ? gameState.currentEq.rightB : gameState.currentEq.leftB;
-
-        if (currentOtherB <= 0) {
-          // Karşı kefede sayı yoksa doğrudan bu değeri her iki kefeden çıkar
-          handleOperation('subtract', value, false, side);
-          return;
-        }
-
-        const subVal = Math.min(value, currentOtherB, currentThisB);
-        if (subVal > 0) {
-          handleOperation('subtract', subVal, false, side);
-        }
-      }
-    } else {
-      // 🖐️ Serbest Kefe Modu: Sadece tıklanan kefeden eksiltilir, terazi hemen gerçek fiziksel ağırlık farkına göre eğilir!
-      const isLeft = side === 'left';
-      let nextLeftA = gameState.currentEq.leftA;
-      let nextLeftB = gameState.currentEq.leftB;
-      let nextRightA = gameState.currentEq.rightA;
-      let nextRightB = gameState.currentEq.rightB;
-
-      if (type === 'x') {
-        if (isLeft) nextLeftA = Math.max(0, nextLeftA - 1);
-        else nextRightA = Math.max(0, nextRightA - 1);
-      } else {
-        if (isLeft) nextLeftB = Math.max(0, nextLeftB - value);
-        else nextRightB = Math.max(0, nextRightB - value);
-      }
-
-      const nextEq: Equation = {
-        leftA: nextLeftA,
-        leftB: nextLeftB,
-        rightA: nextRightA,
-        rightB: nextRightB,
-      };
-
-      playSound('move');
-      addFloatingToken(side, `−${type === 'x' ? '1x' : value}`, 'subtract');
-
-      setGameState(prev => ({
-        ...prev,
-        currentEq: nextEq,
-        steps: [...prev.steps, `[Serbest] ${side === 'left' ? 'Sol' : 'Sağ'} kefeden −${type === 'x' ? '1x' : value}`],
-      }));
-
-      // Serbest modda denge kontrolü
-      const newLeftMass = nextLeftA * effectiveXWeight + nextLeftB;
-      const newRightMass = nextRightA * effectiveXWeight + nextRightB;
-      if (newLeftMass === newRightMass) {
-        playSound('win');
-        setFeedback({
-          type: 'success',
-          message: `🎉 Tebrikler! Kefeleri tam olarak eşitledin (${newLeftMass} br = ${newRightMass} br). Terazi tam dengede!`,
-        });
-      } else {
-        const heavier = newLeftMass > newRightMass ? 'Sol kefe ağır bastı ↘' : 'Sağ kefe ağır bastı ↘';
-        setFeedback({
-          type: 'info',
-          message: `Kefeden ${type === 'x' ? '1x' : value} eksiltildi. ${heavier}`,
-        });
-      }
+      setStats(s => ({ ...s, wrongAttempts: s.wrongAttempts + 1 }));
+      setFeedback({ type: 'error', message: val.explanation });
     }
   };
 
-  // Kefeye Yeni Ağırlık / x Koyma (Ekleme)
-  const handleAddItem = (side: 'left' | 'right', type: 'x' | 'constant', value: number) => {
-    if (gameState.solved || (gameMode === 'rush' && isRushGameOver) || isTilting) return;
-
-    if (opMode === 'balanced') {
-      // ⚡ Akıllı Denge Modu: Her iki tarafa da ekler ve teraziyi önce eğip sonra dengeler
-      handleOperation('add', value, type === 'x', side);
-    } else {
-      // 🖐️ Serbest Kefe Modu: Sadece seçilen kefeye ekler, terazi anında o kefeye doğru çöker!
-      const isLeft = side === 'left';
-      let nextLeftA = gameState.currentEq.leftA;
-      let nextLeftB = gameState.currentEq.leftB;
-      let nextRightA = gameState.currentEq.rightA;
-      let nextRightB = gameState.currentEq.rightB;
-
-      if (type === 'x') {
-        if (isLeft) nextLeftA += 1;
-        else nextRightA += 1;
-      } else {
-        if (isLeft) nextLeftB += value;
-        else nextRightB += value;
-      }
-
-      const nextEq: Equation = {
-        leftA: nextLeftA,
-        leftB: nextLeftB,
-        rightA: nextRightA,
-        rightB: nextRightB,
-      };
-
-      playSound('move');
-      addFloatingToken(side, `+${type === 'x' ? '1x' : value}`, 'add');
-
-      setGameState(prev => ({
-        ...prev,
-        currentEq: nextEq,
-        steps: [...prev.steps, `[Serbest] ${side === 'left' ? 'Sol' : 'Sağ'} kefeye +${type === 'x' ? '1x' : value}`],
-      }));
-
-      // Serbest modda denge kontrolü
-      const newLeftMass = nextLeftA * effectiveXWeight + nextLeftB;
-      const newRightMass = nextRightA * effectiveXWeight + nextRightB;
-      if (newLeftMass === newRightMass) {
-        playSound('win');
-        setFeedback({
-          type: 'success',
-          message: `🎉 Harika! Kefeler tam eşitlendi (${newLeftMass} br = ${newRightMass} br). Terazi tam dengede!`,
-        });
-      } else {
-        const heavier = newLeftMass > newRightMass ? 'Sol kefe ağır bastı ↘' : 'Sağ kefe ağır bastı ↘';
-        setFeedback({
-          type: 'info',
-          message: `${side === 'left' ? 'Sol' : 'Sağ'} kefeye ${type === 'x' ? '1x' : value} eklendi. ${heavier}`,
-        });
-      }
-    }
-  };
-
-  // 3B Kefeden Tıklayarak Nesne Alma (Eksiltme)
-  const handle3DItemClick = (side: 'left' | 'right', item: PanItem) => {
-    handleRemoveItem(side, item.type, item.value);
-  };
-
-  // 2B Mod veya Kefe Tıklaması
-  const handlePanItemClick = (type: 'x' | 'constant', side: 'left' | 'right') => {
-    if (gameState.solved || isTilting) return;
-    if (type === 'x') {
-      handleRemoveItem(side, 'x', 1);
-    } else {
-      const constVal = side === 'left' ? gameState.currentEq.leftB : gameState.currentEq.rightB;
-      if (constVal > 0) {
-        handleRemoveItem(side, 'constant', Math.min(2, constVal));
-      }
-    }
-  };
+  const stageInfo = getEquationStage(currentEq);
+  const recommendedOps = getRecommendedOperations(currentEq);
+  const progressiveHintData = getProgressiveHints(currentEq, hintLevel || 1);
 
   return (
-    <div className="min-h-screen pb-12">
-      {/* Header */}
-      <header className="border-b-2 border-zinc-900 bg-white/95 backdrop-blur-sm sticky top-0 z-20">
-        <div className="max-w-6xl mx-auto px-4 py-2.5 flex items-center justify-between">
-          <button onClick={() => setCurrentGame(null)} className="sketch-btn text-xs font-bold">
-            ← Ana Sayfa
-          </button>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xl">⚖️</span>
-            <h1 className="text-base font-extrabold text-zinc-900 font-mono tracking-wide">CEBİR TERAZİSİ</h1>
+    <div className="min-h-screen pb-16 bg-stone-50 select-none font-sans text-zinc-900">
+      {/* ======================= ÜST BAŞLIK & GEZİNTİ ÇUBUĞU ======================= */}
+      <header className="border-b-2 border-zinc-900 bg-white/95 backdrop-blur-sm sticky top-0 z-20 shadow-sm">
+        <div className="max-w-6xl mx-auto px-4 py-2.5 flex items-center justify-between flex-wrap gap-2">
+          {/* Sol: Geri Dönüş & Başlık */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setCurrentGame(null)}
+              className="sketch-btn text-xs font-bold py-1.5 px-3"
+            >
+              ← Ana Sayfa
+            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">⚖️</span>
+              <div>
+                <h1 className="text-sm sm:text-base font-extrabold text-zinc-900 font-mono tracking-wider">
+                  CEBİR TERAZİSİ
+                </h1>
+                <div className="text-[10px] text-zinc-500 font-mono -mt-0.5">
+                  Fiziksel Denge & Birinci Dereceden Denklem Simülasyonu
+                </div>
+              </div>
+            </div>
           </div>
 
+          {/* Orta: Mod Seçimi (Mod A: Serbest Terazi vs Mod B: Denklem Çözme) */}
+          <div className="flex p-0.5 rounded-xl border-2 border-zinc-900 bg-zinc-100 shadow-sm">
+            <button
+              type="button"
+              onClick={() => {
+                setPlayMode('free');
+                playSound('click');
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
+                playMode === 'free'
+                  ? 'bg-amber-500 text-zinc-950 shadow-sm ring-1 ring-amber-600'
+                  : 'text-zinc-700 hover:text-zinc-900'
+              }`}
+            >
+              🖐️ Mod A: Serbest Terazi
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPlayMode('equation');
+                playSound('click');
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-mono font-bold transition-all ${
+                playMode === 'equation'
+                  ? 'bg-zinc-900 text-white shadow-sm'
+                  : 'text-zinc-700 hover:text-zinc-900'
+              }`}
+            >
+              🎯 Mod B: Denklem Çözme
+            </button>
+          </div>
+
+          {/* Sağ: Yardım & Rapor Butonları */}
           <div className="flex items-center gap-2">
-            {/* Mod Seçimi */}
-            <div className="flex p-0.5 rounded-lg border-2 border-zinc-900 bg-zinc-100">
-              <button
-                type="button"
-                onClick={() => {
-                  setGameMode('zen');
-                  setIsRushGameOver(false);
-                }}
-                className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
-                  gameMode === 'zen' ? 'bg-zinc-900 text-white shadow-sm' : 'text-zinc-700 hover:text-zinc-900'
-                }`}
-              >
-                🧘‍♀️ Laboratuvar
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setGameMode('rush');
-                  restartRush();
-                }}
-                className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all ${
-                  gameMode === 'rush' ? 'bg-amber-500 text-zinc-900 font-extrabold shadow-sm' : 'text-zinc-700 hover:text-zinc-900'
-                }`}
-              >
-                ⚡ Denge Rush
-              </button>
-            </div>
+            <button
+              onClick={() => setShowReportModal(true)}
+              className="px-2.5 py-1.5 rounded-lg border-2 border-zinc-900 bg-white hover:bg-zinc-50 text-xs font-bold font-mono shadow-[1px_1px_0px_#18181b] flex items-center gap-1.5"
+              title="Öğrenme Raporu"
+            >
+              <span>📊</span> Rapor
+            </button>
 
             <button
-              onClick={() => setShowHelp(!showHelp)}
-              className="w-8 h-8 rounded-lg border-2 border-zinc-900 bg-white font-bold text-xs flex items-center justify-center shadow-[1px_1px_0px_#18181b]"
-              title="Nasıl Oynanır?"
+              onClick={() => setShowRulesModal(true)}
+              className="w-8 h-8 rounded-lg border-2 border-zinc-900 bg-white hover:bg-zinc-50 font-bold text-xs flex items-center justify-center shadow-[1px_1px_0px_#18181b]"
+              title="Kurallar & Pedagojik Mantık"
             >
               ?
             </button>
           </div>
         </div>
-      </header>
 
-      {/* Rush Modu Durum Şeridi */}
-      {gameMode === 'rush' && (
-        <div className="bg-amber-100/90 border-b-2 border-zinc-900 py-2 px-4">
-          <div className="max-w-6xl mx-auto flex items-center justify-between flex-wrap gap-2 text-xs font-mono font-bold">
-            <div className="flex items-center gap-3">
-              <span className={`px-2 py-0.5 rounded border border-zinc-900 ${timeLeft <= 10 ? 'bg-rose-500 text-white animate-pulse' : 'bg-white text-zinc-900'}`}>
-                ⏱️ Kalan: {timeLeft}s
-              </span>
-              {streak > 1 && (
-                <span className="px-2 py-0.5 rounded border border-zinc-900 bg-amber-400 text-zinc-950 font-black animate-bounce">
-                  🔥 {streak}x Kombo Serisi!
-                </span>
+        {/* Araç Çubuğu (Toolbar): Sıfırla, Geri Al, İpucu, Yeni Görev, 2D/3D Seçici */}
+        <div className="border-t border-zinc-200 bg-zinc-50/90 py-1.5 px-4">
+          <div className="max-w-6xl mx-auto flex items-center justify-between flex-wrap gap-2 text-xs font-mono">
+            {/* Sol Araçlar */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={handleReset}
+                className="px-2.5 py-1 rounded-md border border-zinc-800 bg-white hover:bg-zinc-100 font-bold active:scale-95 transition-all shadow-sm"
+              >
+                🔄 Sıfırla
+              </button>
+              <button
+                type="button"
+                onClick={handleUndo}
+                className="px-2.5 py-1 rounded-md border border-zinc-800 bg-white hover:bg-zinc-100 font-bold active:scale-95 transition-all shadow-sm"
+              >
+                ↩️ Geri Al
+              </button>
+              {playMode === 'equation' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleGetHint}
+                    className="px-2.5 py-1 rounded-md border border-zinc-800 bg-amber-200 hover:bg-amber-300 font-bold text-amber-950 active:scale-95 transition-all shadow-sm"
+                  >
+                    💡 İpucu Al ({hintLevel}/3)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => startNewProblem(difficulty)}
+                    className="px-2.5 py-1 rounded-md border border-zinc-800 bg-white hover:bg-zinc-100 font-bold active:scale-95 transition-all shadow-sm"
+                  >
+                    🔀 Yeni Denklem
+                  </button>
+                </>
               )}
             </div>
+
+            {/* Sağ Araçlar: Zorluk & 2D/3D Görünüm */}
             <div className="flex items-center gap-3">
-              <span className="text-zinc-700">Çözülen: {problemsSolved}</span>
-              <span className="text-amber-900">En Yüksek Skor: {highScore}</span>
-            </div>
-          </div>
-        </div>
-      )}
+              {playMode === 'equation' && (
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] font-bold text-zinc-500">Zorluk:</span>
+                  {(['kolay', 'orta', 'zor'] as Difficulty[]).map(d => (
+                    <button
+                      key={d}
+                      onClick={() => setDifficulty(d)}
+                      className={`px-2 py-0.5 rounded text-[11px] font-bold uppercase transition-all border ${
+                        difficulty === d
+                          ? 'border-zinc-900 bg-zinc-900 text-white'
+                          : 'border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100'
+                      }`}
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-      {/* Help Panel */}
-      <AnimatePresence>
-        {showHelp && (
-          <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="mx-4 mt-3 p-4 rounded-xl max-w-4xl mx-auto border-2 border-zinc-900 bg-white shadow-[3px_3px_0px_#18181b]"
-          >
-            <h3 className="font-bold text-zinc-900 mb-1.5 text-sm flex items-center gap-2">
-              <span>📖 Cebir Terazisi Kuralları:</span>
-            </h3>
-            <ul className="text-xs text-zinc-700 space-y-1.5">
-              <li>
-                • <strong>Denklik Kuralı:</strong> Terazi dengededir. Bir kefeye ne yaparsan, diğer kefeye de aynısını yapmalısın!
-              </li>
-              <li>
-                • <strong>Tıklayarak Hamle:</strong> Kefedeki mavi [x] kutusuna veya sarı ağırlığa tıklayarak her iki kefeden aynı ağırlığı anında çıkarabilirsin!
-              </li>
-              <li>
-                • <strong>Akıllı Hızlı Hamleler:</strong> Terazinin hemen altındaki önerilen butonlara tek tıkla basarak hızlıca x'i yalnız bırakabilirsin.
-              </li>
-              <li>
-                • <strong>Hedef:</strong> Bir kefede sadece 1 tane x, diğer kefede sadece sayı kalsın: <code>x = ?</code>
-              </li>
-            </ul>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <div className="max-w-6xl mx-auto px-4 py-5 space-y-5">
-        {/* Zorluk & Yeni Denklem */}
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-zinc-600 font-mono">ZORLUK:</span>
-            {(['kolay', 'orta', 'zor'] as Difficulty[]).map(d => (
-              <button
-                key={d}
-                type="button"
-                onClick={() => setDifficulty(d)}
-                className={`px-3 py-1 rounded-lg text-xs font-bold border-2 border-zinc-900 transition-all ${
-                  difficulty === d
-                    ? 'bg-zinc-900 text-white shadow-[2px_2px_0px_#18181b]'
-                    : 'bg-white text-zinc-800 hover:bg-zinc-100 shadow-[1px_1px_0px_#18181b]'
-                }`}
-              >
-                {d.toUpperCase()}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold font-mono px-2.5 py-1 rounded border border-zinc-900 bg-zinc-100">
-              {problemsSolved} Çözüldü
-            </span>
-            <button type="button" onClick={startNewGame} className="sketch-btn text-xs font-bold">
-              🔄 Yeni Denklem
-            </button>
-          </div>
-        </div>
-
-        {/* Pedagojik 4 Aşamalı Çözüm Metodolojisi & İlerleme */}
-        <div className="paper-card !py-3 !px-4">
-          {/* 4 Aşama Göstergesi */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
-            {[
-              { num: 1, title: 'Model & Eşitleme', desc: "x'leri tek kefede topla" },
-              { num: 2, title: 'Bilinmeyenin İzolasyonu', desc: 'Sabit terimleri nötrle' },
-              { num: 3, title: 'Sadeleştirme', desc: 'Katsayıya böl (÷ a)' },
-              { num: 4, title: 'Çözüm Kümesi', desc: 'x = ? elde edildi' },
-            ].map(st => {
-              const isCurrent = stageInfo.stage === st.num;
-              const isDone = stageInfo.stage > st.num;
-              return (
-                <div
-                  key={st.num}
-                  className={`p-2 rounded-lg border-2 text-xs font-mono transition-all ${
-                    isCurrent
-                      ? 'border-amber-600 bg-amber-50 text-amber-950 font-bold shadow-[2px_2px_0px_#d97706] ring-1 ring-amber-400'
-                      : isDone
-                      ? 'border-emerald-600 bg-emerald-50/90 text-emerald-900 shadow-[1px_1px_0px_#059669]'
-                      : 'border-zinc-300 bg-zinc-50 text-zinc-400 opacity-60'
+              {/* 2D / 3D Görünüm Anahtarı */}
+              <div className="flex items-center p-0.5 rounded-lg border border-zinc-800 bg-white shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('2d')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all ${
+                    viewMode === '2d' ? 'bg-zinc-900 text-white' : 'text-zinc-600'
                   }`}
                 >
-                  <div className="flex items-center gap-1.5 font-bold">
-                    <span>{isDone ? '✓' : isCurrent ? '▶' : `${st.num}.`}</span>
-                    <span className="truncate">{st.title}</span>
-                  </div>
-                  <div className="text-[10px] text-zinc-600 font-sans mt-0.5 truncate">{st.desc}</div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-extrabold uppercase font-mono text-zinc-800">
-                {stageInfo.stageName}
-              </span>
+                  ✏️ 2B Çizim
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('3d')}
+                  className={`px-2 py-0.5 rounded text-[11px] font-bold transition-all ${
+                    viewMode === '3d' ? 'bg-zinc-900 text-white' : 'text-zinc-600'
+                  }`}
+                >
+                  🧭 3B Realist
+                </button>
+              </div>
             </div>
-            <span className="text-xs font-mono font-bold px-2 py-0.5 rounded border border-zinc-900 bg-zinc-50">
-              %{stageInfo.progressPercent} Tamamlandı
-            </span>
-          </div>
-
-          {/* Progress Bar (Pencil Hatched Style) */}
-          <div className="w-full h-3 rounded-full border-2 border-zinc-900 bg-zinc-100 overflow-hidden relative">
-            <motion.div
-              className="h-full bg-zinc-900"
-              initial={{ width: 0 }}
-              animate={{ width: `${stageInfo.progressPercent}%` }}
-              transition={{ type: 'spring', stiffness: 140, damping: 18 }}
-            />
-          </div>
-
-          <div className="mt-2 text-xs text-zinc-600 font-medium flex items-center justify-between flex-wrap gap-1">
-            <span>🎯 <strong>Hedef:</strong> {stageInfo.nextGoal}</span>
-            <span className="text-[11px] text-zinc-500 font-mono">
-              (İpucu: Kefedeki nesnelere veya alttaki hızlı hamlelere tıkla)
-            </span>
           </div>
         </div>
+      </header>
 
-        {/* 2D Karakalem Terazi Alanı (Spring Wobble Physics + Tıklanabilir Kefeler) */}
-        <div className="paper-card relative overflow-hidden">
-          {/* Confetti / Sparkle Parıltıları */}
-          <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-            {sparkles.map(p => (
-              <motion.span
-                key={p.id}
-                initial={{ opacity: 1, scale: 0.5, x: 0, y: 0 }}
-                animate={{ opacity: 0, scale: 1.8, x: p.x, y: p.y }}
-                transition={{ duration: 1.2, ease: 'easeOut' }}
-                className="absolute text-xl font-bold select-none"
-                style={{ color: p.color }}
-              >
-                {p.symbol}
-              </motion.span>
-            ))}
+      {/* ======================= ANA OYUN ALANI ======================= */}
+      <main className="max-w-6xl mx-auto px-4 mt-4 space-y-4">
+        {/* Mod B İçin 4 Aşamalı İlerleme Göstergesi */}
+        {playMode === 'equation' && (
+          <div className="paper-card !py-3 !px-4">
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono font-bold uppercase text-zinc-500">Çözüm Aşaması:</span>
+                <span className="text-xs font-mono font-extrabold text-amber-900 bg-amber-100 px-2 py-0.5 rounded border border-amber-300">
+                  {stageInfo.stageName}
+                </span>
+              </div>
+              <div className="text-xs font-mono font-bold text-zinc-700">
+                Hedef Denklem: <span className="font-extrabold text-sm">{equationToString(equation)}</span>
+              </div>
+            </div>
+
+            {/* İlerleme Çubuğu */}
+            <div className="w-full h-2 rounded-full border border-zinc-800 bg-zinc-100 overflow-hidden">
+              <motion.div
+                className="h-full bg-zinc-900"
+                initial={{ width: 0 }}
+                animate={{ width: `${stageInfo.progressPercent}%` }}
+                transition={{ type: 'spring', stiffness: 140, damping: 18 }}
+              />
+            </div>
           </div>
+        )}
 
+        {/* Geri Bildirim Şeridi */}
+        <AnimatePresence>
+          {feedback && (
+            <motion.div
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              className={`p-3 rounded-xl border-2 font-mono text-xs font-bold shadow-sm flex items-center justify-between gap-2 ${
+                feedback.type === 'success'
+                  ? 'border-emerald-700 bg-emerald-100 text-emerald-950'
+                  : feedback.type === 'error'
+                  ? 'border-rose-700 bg-rose-100 text-rose-950'
+                  : 'border-zinc-800 bg-white text-zinc-900'
+              }`}
+            >
+              <span>{feedback.message}</span>
+              <button
+                onClick={() => setFeedback(null)}
+                className="text-xs text-zinc-500 hover:text-zinc-900 font-bold ml-2"
+              >
+                ✕
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ======================= TERAZİ GÖRSEL ALANI ======================= */}
+        <div className="paper-card relative overflow-hidden">
+          {/* Üst Durum Göstergesi */}
           <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-            <div className="flex items-center gap-2.5">
-              <span className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-500">Mevcut Durum:</span>
-              <span className="px-3 py-1 rounded-lg border-2 border-zinc-900 bg-zinc-50 font-mono font-extrabold text-sm text-zinc-900 shadow-[2px_2px_0px_#18181b]">
-                {equationToString(gameState.currentEq)}
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-mono font-bold text-zinc-500 uppercase">Mevcut Durum:</span>
+              <span className="px-3 py-1 rounded-lg border-2 border-zinc-900 bg-zinc-50 font-mono font-extrabold text-sm shadow-[2px_2px_0px_#18181b]">
+                {playMode === 'equation' ? equationToString(currentEq) : freeScaleEval.equationDisplay}
               </span>
             </div>
 
-            {/* Görünüm Seçimi (3B Realist vs 2B Çizim) */}
-            <div className="flex items-center gap-1 p-0.5 rounded-lg border-2 border-zinc-900 bg-zinc-100">
-              <button
-                type="button"
-                onClick={() => setViewMode('3d')}
-                className={`px-3 py-1 rounded-md text-xs font-bold font-mono transition-all ${
-                  viewMode === '3d'
-                    ? 'bg-zinc-900 text-white shadow-sm'
-                    : 'text-zinc-700 hover:text-zinc-900'
-                }`}
-              >
-                🧭 3B Realist
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode('2d')}
-                className={`px-3 py-1 rounded-md text-xs font-bold font-mono transition-all ${
-                  viewMode === '2d'
-                    ? 'bg-zinc-900 text-white shadow-sm'
-                    : 'text-zinc-700 hover:text-zinc-900'
-                }`}
-              >
-                ✏️ 2B Çizim
-              </button>
-            </div>
-
-            <motion.div
-              layout
+            {/* Denge Durum Rozeti */}
+            <div
               className={`px-3 py-1 rounded-lg border-2 text-xs font-bold font-mono transition-all flex items-center gap-1.5 ${
-                isTilting
-                  ? 'border-amber-600 bg-amber-50 text-amber-900 shadow-[2px_2px_0px_#d97706] animate-pulse'
-                  : currentLeftMass === currentRightMass
+                (playMode === 'equation' ? currentLeftMass === currentRightMass : freeScaleEval.isBalanced)
                   ? 'border-emerald-600 bg-emerald-50 text-emerald-800 shadow-[2px_2px_0px_#059669]'
                   : 'border-rose-600 bg-rose-50 text-rose-800 shadow-[2px_2px_0px_#e11d48]'
               }`}
             >
-              {isTilting && tiltStatus ? (
-                <span>⚡ {tiltStatus}</span>
-              ) : currentLeftMass === currentRightMass ? (
-                <span>✓ KEFELER DENGEDE ({currentLeftMass} br)</span>
+              {(playMode === 'equation' ? currentLeftMass === currentRightMass : freeScaleEval.isBalanced) ? (
+                <span>✓ KEFELER DENGEDE (Yatay Eşitlik)</span>
               ) : (
                 <span>
-                  ≠ {currentLeftMass > currentRightMass ? 'SOL KEFE AĞIR (↘)' : 'SAĞ KEFE AĞIR (↘)'} ({Math.abs(currentLeftMass - currentRightMass)} br fark)
+                  ≠ {((playMode === 'equation' ? currentLeftMass > currentRightMass : freeScaleEval.diff > 0) ? 'SOL KEFE AĞIR (Aşağı Çöktü ↘)' : 'SAĞ KEFE AĞIR (Aşağı Çöktü ↘)')}
                 </span>
               )}
-            </motion.div>
+            </div>
           </div>
 
-          {/* Serbest Kefe Modu Bilgi ve Dengeleme Çubuğu */}
-          {opMode === 'free' && (
-            <motion.div
-              initial={{ opacity: 0, y: -6 }}
-              animate={{ opacity: 1, y: 0 }}
-              className={`mb-3 p-3 rounded-xl border-2 flex items-center justify-between flex-wrap gap-2 text-xs ${
-                currentLeftMass === currentRightMass
-                  ? 'border-emerald-600 bg-emerald-50/95 text-emerald-950 shadow-[2px_2px_0px_#059669]'
-                  : 'border-amber-600 bg-amber-50/95 text-amber-950 shadow-[2px_2px_0px_#d97706]'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-xl">{currentLeftMass === currentRightMass ? '🎉' : '🖐️'}</span>
-                <div>
-                  <div className="font-bold font-mono">
-                    {currentLeftMass === currentRightMass
-                      ? 'Harika! Terazi Tam Dengede! (Sol: ' + currentLeftMass + ' br = Sağ: ' + currentRightMass + ' br)'
-                      : 'Serbest Kefe Modu: Ağır basan taraf aşağı çöktü! Dengelemek için hafif tarafa ağırlık ekle veya ağır taraftan eksilt.'}
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGameState(prev => ({
-                      ...prev,
-                      currentEq: prev.equation,
-                      steps: [equationToString(prev.equation)],
-                    }));
-                    playSound('click');
-                    setFeedback({ type: 'info', message: 'Denklem başlangıç durumuna sıfırlandı.' });
-                  }}
-                  className="px-3 py-1 rounded-lg bg-white hover:bg-zinc-100 text-zinc-800 font-mono text-xs font-bold border border-zinc-900 shadow transition-all active:scale-95"
-                >
-                  🔄 Başlangıca Dön
-                </button>
-              </div>
-            </motion.div>
-          )}
-
-          {/* TERAZİ ALANI: 3B Realist WebGL Model VEYA 2B Çizim */}
+          {/* TERAZİ BİLEŞENİ (2B SVG VEYA 3B R3F) */}
           {viewMode === '3d' ? (
             <div className="relative">
               <BalanceScale3D
-                leftItems={activeLeftItems}
-                rightItems={activeRightItems}
-                leftMass={currentLeftMass}
-                rightMass={currentRightMass}
-                externalTilt={tiltAngle}
+                leftItems={playMode === 'equation' ? leftPanItems : freeLeftItems.map(i => ({ id: i.id, type: i.type, value: i.value, label: i.label }))}
+                rightItems={playMode === 'equation' ? rightPanItems : freeRightItems.map(i => ({ id: i.id, type: i.type, value: i.value, label: i.label }))}
+                leftMass={playMode === 'equation' ? currentLeftMass : freeScaleEval.leftMass}
+                rightMass={playMode === 'equation' ? currentRightMass : freeScaleEval.rightMass}
+                onItemClick={(side, item) => {
+                  if (playMode === 'equation') {
+                    handleRemoveItem(side, item);
+                  } else {
+                    handleRemoveFreeItem(side, item.id);
+                  }
+                }}
+                interactive={!solved}
+                externalTilt={manualTiltAngle}
                 isTilting={isTilting}
-                onItemClick={handle3DItemClick}
-                interactive={!gameState.solved && (gameMode !== 'rush' || !isRushGameOver) && !isTilting}
               />
             </div>
           ) : (
-            <div className="flex justify-center py-4 bg-zinc-50/60 rounded-xl border-2 border-dashed border-zinc-300 relative select-none overflow-hidden">
-              {/* Uçuşan İşlem Rozetleri (Floating Tokens) */}
-              <AnimatePresence>
-                {floatingTokens.map(token => (
-                  <motion.div
-                    key={token.id}
-                    initial={{ opacity: 0, scale: 0.5, y: 0 }}
-                    animate={{
-                      opacity: [0, 1, 1, 0],
-                      scale: [0.8, 1.25, 1.1, 0.9],
-                      y: token.type === 'subtract' || token.type === 'divide' ? -42 : 36,
-                    }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.85, ease: 'easeOut' }}
-                    className={`absolute top-16 pointer-events-none z-20 px-3 py-1 rounded-full font-mono font-extrabold text-xs border-2 shadow-[2px_2px_0px_#18181b] ${
-                      token.side === 'left' ? 'left-[22%]' : 'right-[22%]'
-                    } ${
-                      token.type === 'subtract'
-                        ? 'bg-rose-100 text-rose-800 border-zinc-900'
-                        : token.type === 'add'
-                        ? 'bg-emerald-100 text-emerald-800 border-zinc-900'
-                        : 'bg-amber-100 text-amber-900 border-zinc-900'
-                    }`}
-                  >
-                    {token.text}
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-
-              <svg width="100%" height="300" viewBox="0 0 640 300" className="max-w-2xl overflow-visible">
+            /* 2B SVG HAREKETLİ TERAZİ */
+            <div className="flex justify-center py-4 bg-stone-100/70 rounded-2xl border-2 border-dashed border-zinc-300 relative select-none overflow-hidden">
+              <svg width="100%" height="320" viewBox="0 0 640 320" className="max-w-2xl overflow-visible">
                 {/* Zemin Kaidesi */}
-                <ellipse cx="320" cy="275" rx="90" ry="12" fill="#f4f4f5" stroke="#18181b" strokeWidth="2" />
-                <rect x="313" y="70" width="14" height="205" rx="3" fill="#ffffff" stroke="#18181b" strokeWidth="2" />
+                <ellipse cx="320" cy="290" rx="95" ry="14" fill="#f4f4f5" stroke="#18181b" strokeWidth="2.5" />
+                <rect x="313" y="75" width="14" height="215" rx="3" fill="#ffffff" stroke="#18181b" strokeWidth="2.5" />
 
                 {/* Destek Üçgeni */}
-                <polygon points="302,275 338,275 320,195" fill="#f4f4f5" stroke="#18181b" strokeWidth="2" />
+                <polygon points="300,290 340,290 320,205" fill="#f4f4f5" stroke="#18181b" strokeWidth="2" />
 
-                {/* Açı Ölçer Skalası (Center Gauge Arc) */}
-                <g transform="translate(320, 75)">
-                  <path
-                    d="M -35 -40 A 53 53 0 0 1 35 -40"
-                    fill="none"
-                    stroke="#a1a1aa"
-                    strokeWidth="1.5"
-                    strokeDasharray="2 3"
-                  />
+                {/* Açı Skalası */}
+                <g transform="translate(320, 80)">
+                  <path d="M -35 -40 A 53 53 0 0 1 35 -40" fill="none" stroke="#a1a1aa" strokeWidth="1.5" strokeDasharray="2 3" />
                   <line x1="0" y1="-46" x2="0" y2="-54" stroke="#059669" strokeWidth="2" />
-                  <line x1="-28" y1="-41" x2="-34" y2="-47" stroke="#71717a" strokeWidth="1.5" />
-                  <line x1="28" y1="-41" x2="34" y2="-47" stroke="#71717a" strokeWidth="1.5" />
                 </g>
 
-                {/* Dönen Terazi Kolu (Spring Animasyonu) */}
-                <g transform="translate(320, 75)">
+                {/* Dönen Kiriş ve Askı Montajı */}
+                <g transform="translate(320, 80)">
                   <motion.g
-                    animate={{ rotate: Math.max(-24, Math.min(24, effective2DTiltAngle)) }}
-                    transition={{ type: 'spring', stiffness: 140, damping: 10, mass: 0.9 }}
+                    animate={{ rotate: Math.max(-22, Math.min(22, tiltAngle2D)) }}
+                    transition={{ type: 'spring', stiffness: 140, damping: 12, mass: 0.9 }}
                   >
-                    <rect x="-240" y="-4" width="480" height="8" rx="4" fill="#18181b" stroke="#18181b" strokeWidth="1" />
+                    {/* Yatay Denge Kirişi */}
+                    <rect x="-240" y="-5" width="480" height="10" rx="5" fill="#18181b" stroke="#18181b" strokeWidth="1" />
+                    
+                    {/* Merkez Destek / Mesnet Pimi (Eşittir = / Eşit Değil ≠ Sembolü) */}
                     <circle
                       cx="0"
                       cy="0"
-                      r="14"
-                      fill={Math.abs(effective2DTiltAngle) < 1 ? '#10b981' : '#f59e0b'}
+                      r="16"
+                      fill={Math.abs(tiltAngle2D) < 1 ? '#10b981' : '#f59e0b'}
                       stroke="#18181b"
                       strokeWidth="2.5"
                     />
-                    <text
-                      x="0"
-                      y="4.5"
-                      textAnchor="middle"
-                      fill="#ffffff"
-                      fontSize="13"
-                      fontWeight="900"
-                      fontFamily="monospace"
-                    >
-                      {Math.abs(effective2DTiltAngle) < 1 ? '=' : '≠'}
+                    <text x="0" y="5" textAnchor="middle" fill="#ffffff" fontSize="14" fontWeight="900" fontFamily="monospace">
+                      {Math.abs(tiltAngle2D) < 1 ? '=' : '≠'}
                     </text>
-                    <polygon
-                      points="-2.5,0 2.5,0 0,-44"
-                      fill={Math.abs(effective2DTiltAngle) < 1 ? '#059669' : '#e11d48'}
-                      stroke="#18181b"
-                      strokeWidth="1.5"
-                    />
+                    <polygon points="-2.5,0 2.5,0 0,-44" fill={Math.abs(tiltAngle2D) < 1 ? '#059669' : '#e11d48'} stroke="#18181b" strokeWidth="1.5" />
 
-                    {/* SOL KEFE ASKI MONTAJI */}
+                    {/* SOL KEFE ASKI MONTAJI (Kefeler yerçekimi ile daima yatay kalır!) */}
                     <g transform="translate(-190, 0)">
-                      <circle cx="0" cy="0" r="4" fill="#ffffff" stroke="#18181b" strokeWidth="2" />
+                      <circle cx="0" cy="0" r="4.5" fill="#ffffff" stroke="#18181b" strokeWidth="2" />
                       <motion.g
-                        animate={{ rotate: -Math.max(-24, Math.min(24, effective2DTiltAngle)) }}
-                        transition={{ type: 'spring', stiffness: 140, damping: 10, mass: 0.9 }}
+                        animate={{ rotate: -Math.max(-22, Math.min(22, tiltAngle2D)) }}
+                        transition={{ type: 'spring', stiffness: 140, damping: 12, mass: 0.9 }}
                       >
-                        <line x1="0" y1="0" x2="-45" y2="76" stroke="#18181b" strokeWidth="1.5" strokeDasharray="3 2" />
-                        <line x1="0" y1="0" x2="45" y2="76" stroke="#18181b" strokeWidth="1.5" strokeDasharray="3 2" />
+                        {/* Askı Zincirleri */}
+                        <line x1="0" y1="0" x2="-48" y2="82" stroke="#18181b" strokeWidth="1.5" strokeDasharray="3 2" />
+                        <line x1="0" y1="0" x2="48" y2="82" stroke="#18181b" strokeWidth="1.5" strokeDasharray="3 2" />
 
-                        <g transform="translate(0, 76)">
-                          <ellipse cx="0" cy="0" rx="72" ry="14" fill="#ffffff" stroke="#18181b" strokeWidth="2.5" />
-                          <path d="M -72 0 C -72 14, 72 14, 72 0" fill="#f4f4f5" stroke="#18181b" strokeWidth="2" />
+                        {/* Sol Kefe Tabağı & Dropzone */}
+                        <g transform="translate(0, 82)">
+                          <ellipse
+                            cx="0"
+                            cy="0"
+                            rx="76"
+                            ry="16"
+                            fill={hoveredPan === 'left' ? '#fef08a' : '#ffffff'}
+                            stroke="#18181b"
+                            strokeWidth={hoveredPan === 'left' ? '3.5' : '2.5'}
+                            strokeDasharray={hoveredPan === 'left' ? '4 2' : 'none'}
+                          />
+                          <path d="M -76 0 C -76 16, 76 16, 76 0" fill="#f4f4f5" stroke="#18181b" strokeWidth="2" />
 
+                          {/* Kefe İçi Nesneler */}
                           <g transform="translate(0, -18)">
-                            {Array.from({ length: Math.min(6, Math.max(0, gameState.currentEq.leftA)) }, (_, idx) => {
-                              const total = Math.min(6, gameState.currentEq.leftA);
+                            {(playMode === 'equation' ? leftPanItems : freeLeftItems).map((it, idx) => {
+                              const total = (playMode === 'equation' ? leftPanItems : freeLeftItems).length;
                               const xOffset = -total * 13 + idx * 26 + 13;
                               return (
                                 <g
-                                  key={`l-box-${idx}`}
-                                  transform={`translate(${xOffset}, -8)`}
+                                  key={it.id}
+                                  transform={`translate(${xOffset}, -6)`}
                                   className="cursor-pointer transition-transform hover:scale-110 active:scale-95"
-                                  onClick={() => handlePanItemClick('x', 'left')}
+                                  onClick={() => {
+                                    if (playMode === 'equation') handleRemoveItem('left', it as PanItem);
+                                    else handleRemoveFreeItem('left', it.id);
+                                  }}
                                 >
-                                  <title>Kefelerden 1x Eksilt</title>
-                                  <rect x="-11" y="-11" width="22" height="22" rx="4" fill="#2563eb" stroke="#18181b" strokeWidth="2" />
-                                  <text x="0" y="4" textAnchor="middle" fill="#ffffff" fontSize="12" fontWeight="bold">x</text>
+                                  <title>{it.type === 'x' ? 'x kutusu (tıkla ve kaldır)' : `${it.value} birim ağırlık (tıkla ve kaldır)`}</title>
+                                  {it.type === 'x' ? (
+                                    <>
+                                      <rect x="-12" y="-12" width="24" height="24" rx="4" fill="#2563eb" stroke="#18181b" strokeWidth="2" />
+                                      <text x="0" y="4" textAnchor="middle" fill="#ffffff" fontSize="12" fontWeight="bold">x</text>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <circle cx="0" cy="0" r="13" fill="#f59e0b" stroke="#18181b" strokeWidth="2" />
+                                      <text x="0" y="4.5" textAnchor="middle" fill="#18181b" fontSize="11" fontWeight="bold">{it.value}</text>
+                                    </>
+                                  )}
                                 </g>
                               );
                             })}
-
-                            {gameState.currentEq.leftB !== 0 && (
-                              <g
-                                transform="translate(0, 14)"
-                                className="cursor-pointer transition-transform hover:scale-110 active:scale-95"
-                                onClick={() => handlePanItemClick('constant', 'left')}
-                              >
-                                <title>Bu sayıyı her iki taraftan temizle</title>
-                                <circle cx="0" cy="0" r="13" fill="#f59e0b" stroke="#18181b" strokeWidth="2" />
-                                <text x="0" y="4.5" textAnchor="middle" fill="#18181b" fontSize="11" fontWeight="bold">
-                                  {gameState.currentEq.leftB > 0 ? `+${gameState.currentEq.leftB}` : `${gameState.currentEq.leftB}`}
-                                </text>
-                              </g>
-                            )}
                           </g>
 
-                          <text x="0" y="32" textAnchor="middle" fill="#18181b" fontSize="12" fontWeight="bold" fontFamily="monospace">
-                            Sol: {leftStr}
+                          <text x="0" y="34" textAnchor="middle" fill="#18181b" fontSize="12" fontWeight="bold" fontFamily="monospace">
+                            Sol: {playMode === 'equation' ? formatSide(currentEq.leftA, currentEq.leftB) : freeScaleEval.leftFormula}
                           </text>
                         </g>
                       </motion.g>
                     </g>
 
-                    {/* SAĞ KEFE ASKI MONTAJI */}
+                    {/* SAĞ KEFE ASKI MONTAJI (Kefeler yerçekimi ile daima yatay kalır!) */}
                     <g transform="translate(190, 0)">
-                      <circle cx="0" cy="0" r="4" fill="#ffffff" stroke="#18181b" strokeWidth="2" />
+                      <circle cx="0" cy="0" r="4.5" fill="#ffffff" stroke="#18181b" strokeWidth="2" />
                       <motion.g
-                        animate={{ rotate: -Math.max(-24, Math.min(24, effective2DTiltAngle)) }}
-                        transition={{ type: 'spring', stiffness: 140, damping: 10, mass: 0.9 }}
+                        animate={{ rotate: -Math.max(-22, Math.min(22, tiltAngle2D)) }}
+                        transition={{ type: 'spring', stiffness: 140, damping: 12, mass: 0.9 }}
                       >
-                        <line x1="0" y1="0" x2="-45" y2="76" stroke="#18181b" strokeWidth="1.5" strokeDasharray="3 2" />
-                        <line x1="0" y1="0" x2="45" y2="76" stroke="#18181b" strokeWidth="1.5" strokeDasharray="3 2" />
+                        {/* Askı Zincirleri */}
+                        <line x1="0" y1="0" x2="-48" y2="82" stroke="#18181b" strokeWidth="1.5" strokeDasharray="3 2" />
+                        <line x1="0" y1="0" x2="48" y2="82" stroke="#18181b" strokeWidth="1.5" strokeDasharray="3 2" />
 
-                        <g transform="translate(0, 76)">
-                          <ellipse cx="0" cy="0" rx="72" ry="14" fill="#ffffff" stroke="#18181b" strokeWidth="2.5" />
-                          <path d="M -72 0 C -72 14, 72 14, 72 0" fill="#f4f4f5" stroke="#18181b" strokeWidth="2" />
+                        {/* Sağ Kefe Tabağı & Dropzone */}
+                        <g transform="translate(0, 82)">
+                          <ellipse
+                            cx="0"
+                            cy="0"
+                            rx="76"
+                            ry="16"
+                            fill={hoveredPan === 'right' ? '#fef08a' : '#ffffff'}
+                            stroke="#18181b"
+                            strokeWidth={hoveredPan === 'right' ? '3.5' : '2.5'}
+                            strokeDasharray={hoveredPan === 'right' ? '4 2' : 'none'}
+                          />
+                          <path d="M -76 0 C -76 16, 76 16, 76 0" fill="#f4f4f5" stroke="#18181b" strokeWidth="2" />
 
+                          {/* Kefe İçi Nesneler */}
                           <g transform="translate(0, -18)">
-                            {Array.from({ length: Math.min(6, Math.max(0, gameState.currentEq.rightA)) }, (_, idx) => {
-                              const total = Math.min(6, gameState.currentEq.rightA);
+                            {(playMode === 'equation' ? rightPanItems : freeRightItems).map((it, idx) => {
+                              const total = (playMode === 'equation' ? rightPanItems : freeRightItems).length;
                               const xOffset = -total * 13 + idx * 26 + 13;
                               return (
                                 <g
-                                  key={`r-box-${idx}`}
-                                  transform={`translate(${xOffset}, -8)`}
+                                  key={it.id}
+                                  transform={`translate(${xOffset}, -6)`}
                                   className="cursor-pointer transition-transform hover:scale-110 active:scale-95"
-                                  onClick={() => handlePanItemClick('x', 'right')}
+                                  onClick={() => {
+                                    if (playMode === 'equation') handleRemoveItem('right', it as PanItem);
+                                    else handleRemoveFreeItem('right', it.id);
+                                  }}
                                 >
-                                  <title>Kefelerden 1x Eksilt</title>
-                                  <rect x="-11" y="-11" width="22" height="22" rx="4" fill="#2563eb" stroke="#18181b" strokeWidth="2" />
-                                  <text x="0" y="4" textAnchor="middle" fill="#ffffff" fontSize="12" fontWeight="bold">x</text>
+                                  <title>{it.type === 'x' ? 'x kutusu (tıkla ve kaldır)' : `${it.value} birim ağırlık (tıkla ve kaldır)`}</title>
+                                  {it.type === 'x' ? (
+                                    <>
+                                      <rect x="-12" y="-12" width="24" height="24" rx="4" fill="#2563eb" stroke="#18181b" strokeWidth="2" />
+                                      <text x="0" y="4" textAnchor="middle" fill="#ffffff" fontSize="12" fontWeight="bold">x</text>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <circle cx="0" cy="0" r="13" fill="#f59e0b" stroke="#18181b" strokeWidth="2" />
+                                      <text x="0" y="4.5" textAnchor="middle" fill="#18181b" fontSize="11" fontWeight="bold">{it.value}</text>
+                                    </>
+                                  )}
                                 </g>
                               );
                             })}
-
-                            {gameState.currentEq.rightB !== 0 && (
-                              <g
-                                transform="translate(0, 14)"
-                                className="cursor-pointer transition-transform hover:scale-110 active:scale-95"
-                                onClick={() => handlePanItemClick('constant', 'right')}
-                              >
-                                <title>Bu sayıyı her iki taraftan temizle</title>
-                                <circle cx="0" cy="0" r="13" fill="#f59e0b" stroke="#18181b" strokeWidth="2" />
-                                <text x="0" y="4.5" textAnchor="middle" fill="#18181b" fontSize="11" fontWeight="bold">
-                                  {gameState.currentEq.rightB > 0 ? `+${gameState.currentEq.rightB}` : `${gameState.currentEq.rightB}`}
-                                </text>
-                              </g>
-                            )}
                           </g>
 
-                          <text x="0" y="32" textAnchor="middle" fill="#18181b" fontSize="12" fontWeight="bold" fontFamily="monospace">
-                            Sağ: {rightStr}
+                          <text x="0" y="34" textAnchor="middle" fill="#18181b" fontSize="12" fontWeight="bold" fontFamily="monospace">
+                            Sağ: {playMode === 'equation' ? formatSide(currentEq.rightA, currentEq.rightB) : freeScaleEval.rightFormula}
                           </text>
                         </g>
                       </motion.g>
@@ -1244,490 +873,351 @@ export default function AlgebraGame() {
             </div>
           )}
 
-          {/* KEFE ÇALIŞMA MODU VE KONTROL ŞERİDİ */}
-          <div className="flex items-center justify-between flex-wrap gap-2 mt-4 pt-3 border-t-2 border-zinc-200">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold font-mono text-zinc-700">KEFE MODU:</span>
-              <div className="flex p-0.5 rounded-lg border-2 border-zinc-900 bg-zinc-100 shadow-sm">
-                <button
-                  type="button"
-                  onClick={() => setOpMode('balanced')}
-                  className={`px-3 py-1 rounded-md text-xs font-bold font-mono transition-all ${
-                    opMode === 'balanced'
-                      ? 'bg-zinc-900 text-white shadow-sm'
-                      : 'text-zinc-700 hover:text-zinc-900'
-                  }`}
-                  title="Bir kefeden alıp koyduğunda terazi cebirsel dengeyi korur"
-                >
-                  ⚡ Otomatik Denge (Cebir)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setOpMode('free')}
-                  className={`px-3 py-1 rounded-md text-xs font-bold font-mono transition-all ${
-                    opMode === 'free'
-                      ? 'bg-amber-500 text-zinc-950 font-black shadow-sm'
-                      : 'text-zinc-700 hover:text-zinc-900'
-                  }`}
-                  title="Kefelere serbestçe ağırlık ekleyip çıkarabilirsin, terazi gerçek ağırlığa göre eğilir"
-                >
-                  🖐️ Serbest Kefe (Fizik)
-                </button>
-              </div>
+          {/* Sürükle-Bırak Kefeleri İçin Etkileşimli Bırakma Hedef Alanları (HTML5 Dropzones) */}
+          <div className="grid grid-cols-2 gap-4 mt-3">
+            <div
+              onDragOver={e => { e.preventDefault(); setHoveredPan('left'); }}
+              onDragLeave={() => setHoveredPan(null)}
+              onDrop={e => { e.preventDefault(); handleDropOnPan('left'); }}
+              className={`p-3 rounded-xl border-2 transition-all flex flex-col items-center justify-center text-center cursor-pointer ${
+                hoveredPan === 'left'
+                  ? 'border-blue-600 bg-blue-50 ring-2 ring-blue-400'
+                  : 'border-zinc-300 bg-white hover:bg-zinc-50'
+              }`}
+            >
+              <span className="text-xs font-mono font-bold text-zinc-700">
+                📥 Sol Kefeye Bırak (veya tıkla)
+              </span>
+              <span className="text-[11px] text-zinc-500 mt-0.5">
+                Mevcut: {playMode === 'equation' ? `${leftPanItems.length} nesne (${currentLeftMass} br)` : `${freeLeftItems.length} nesne (${freeScaleEval.leftMass} br)`}
+              </span>
             </div>
 
-            <span className="text-[11px] text-zinc-500 font-medium">
-              {opMode === 'balanced'
-                ? '💡 Otomatik Denge: Tıkladığın nesne iki kefeden de eşitlenir.'
-                : '⚖️ Serbest Kefe: Ağır basan taraf aşağı çöker. Kefeleri dengelemeye çalış!'}
-            </span>
-          </div>
-
-          {/* KEFELERDEKİ NESNELER: ALMA (EKSİLTME) & KOYMA (EKLEME) KONTROL MASASI */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-            {/* Sol Kefe Kontrol Masası */}
-            <div className="p-3.5 rounded-xl border-2 border-zinc-900 bg-white shadow-[2px_2px_0px_#18181b] space-y-3">
-              <div className="flex items-center justify-between pb-2 border-b border-zinc-200">
-                <div className="flex items-center gap-2">
-                  <span className="w-3.5 h-3.5 rounded-full bg-blue-600 border border-zinc-900 shadow-sm inline-block"></span>
-                  <span className="text-xs font-bold font-mono text-zinc-900">
-                    Sol Kefe: <span className="text-blue-700 font-extrabold">{leftStr}</span>
-                  </span>
-                </div>
-                <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded border border-zinc-300 bg-zinc-50 text-zinc-800">
-                  Ağırlık: {currentLeftMass} br
-                </span>
-              </div>
-
-              {/* 🗑️ Kefeden Al (Eksilt) */}
-              <div>
-                <div className="text-[11px] text-zinc-600 font-bold mb-1.5 flex items-center justify-between">
-                  <span>🗑️ Kefeden Al (Kaldır):</span>
-                  <span className="text-[10px] text-zinc-400 font-normal">3B modelden de tıklayabilirsin</span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5 min-h-[32px]">
-                  {activeLeftItems.length === 0 ? (
-                    <span className="text-xs text-zinc-400 font-mono italic">Kefe boş (0)</span>
-                  ) : (
-                    activeLeftItems.map(item => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => handleRemoveItem('left', item.type, item.value)}
-                        disabled={gameState.solved || isTilting}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px] hover:scale-105 ${
-                          item.type === 'x'
-                            ? 'bg-blue-600 text-white hover:bg-blue-700'
-                            : item.value < 0
-                            ? 'bg-rose-500 text-white hover:bg-rose-600'
-                            : 'bg-amber-400 text-zinc-900 hover:bg-amber-300'
-                        }`}
-                        title={item.value < 0 ? `${Math.abs(item.value)} negatif ağırlığı nötrle` : `${item.label} nesnesini sol kefeden kaldır`}
-                      >
-                        {item.type === 'x' ? '📦 −1x' : item.value < 0 ? `🎈 +${Math.abs(item.value)} Nötrle` : `⚖️ −${item.value}`}
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              {/* ➕ Kefeye Koy (Ağırlık Ekle) */}
-              <div className="pt-2 border-t border-dashed border-zinc-200">
-                <div className="text-[11px] text-zinc-600 font-bold mb-1.5 flex items-center justify-between">
-                  <span>➕ Kefeye Koy (Ağırlık Ekle):</span>
-                  <span className="text-[10px] text-emerald-700 font-medium font-mono">
-                    {opMode === 'balanced' ? 'Her iki kefeye' : 'Sadece sol kefeye'}
-                  </span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handleAddItem('left', 'x', 1)}
-                    disabled={gameState.solved || isTilting}
-                    className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 bg-blue-100 hover:bg-blue-200 text-blue-900 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px]"
-                    title="Sol kefeye 1x sandığı koy"
-                  >
-                    📦 +1x
-                  </button>
-                  {[1, 2, 5].map(v => (
-                    <button
-                      key={v}
-                      type="button"
-                      onClick={() => handleAddItem('left', 'constant', v)}
-                      disabled={gameState.solved || isTilting}
-                      className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 bg-amber-100 hover:bg-amber-200 text-amber-950 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px]"
-                      title={`Sol kefeye +${v} pirinç ağırlık koy`}
-                    >
-                      ⚖️ +{v}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Sağ Kefe Kontrol Masası */}
-            <div className="p-3.5 rounded-xl border-2 border-zinc-900 bg-white shadow-[2px_2px_0px_#18181b] space-y-3">
-              <div className="flex items-center justify-between pb-2 border-b border-zinc-200">
-                <div className="flex items-center gap-2">
-                  <span className="w-3.5 h-3.5 rounded-full bg-amber-500 border border-zinc-900 shadow-sm inline-block"></span>
-                  <span className="text-xs font-bold font-mono text-zinc-900">
-                    Sağ Kefe: <span className="text-amber-800 font-extrabold">{rightStr}</span>
-                  </span>
-                </div>
-                <span className="text-[11px] font-mono font-bold px-2 py-0.5 rounded border border-zinc-300 bg-zinc-50 text-zinc-800">
-                  Ağırlık: {currentRightMass} br
-                </span>
-              </div>
-
-              {/* 🗑️ Kefeden Al (Eksilt) */}
-              <div>
-                <div className="text-[11px] text-zinc-600 font-bold mb-1.5 flex items-center justify-between">
-                  <span>🗑️ Kefeden Al (Kaldır):</span>
-                  <span className="text-[10px] text-zinc-400 font-normal">3B modelden de tıklayabilirsin</span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5 min-h-[32px]">
-                  {activeRightItems.length === 0 ? (
-                    <span className="text-xs text-zinc-400 font-mono italic">Kefe boş (0)</span>
-                  ) : (
-                    activeRightItems.map(item => (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => handleRemoveItem('right', item.type, item.value)}
-                        disabled={gameState.solved || isTilting}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px] hover:scale-105 ${
-                          item.type === 'x'
-                            ? 'bg-blue-600 text-white hover:bg-blue-700'
-                            : item.value < 0
-                            ? 'bg-rose-500 text-white hover:bg-rose-600'
-                            : 'bg-amber-400 text-zinc-900 hover:bg-amber-300'
-                        }`}
-                        title={item.value < 0 ? `${Math.abs(item.value)} negatif ağırlığı nötrle` : `${item.label} nesnesini sağ kefeden kaldır`}
-                      >
-                        {item.type === 'x' ? '📦 −1x' : item.value < 0 ? `🎈 +${Math.abs(item.value)} Nötrle` : `⚖️ −${item.value}`}
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              {/* ➕ Kefeye Koy (Ağırlık Ekle) */}
-              <div className="pt-2 border-t border-dashed border-zinc-200">
-                <div className="text-[11px] text-zinc-600 font-bold mb-1.5 flex items-center justify-between">
-                  <span>➕ Kefeye Koy (Ağırlık Ekle):</span>
-                  <span className="text-[10px] text-emerald-700 font-medium font-mono">
-                    {opMode === 'balanced' ? 'Her iki kefeye' : 'Sadece sağ kefeye'}
-                  </span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => handleAddItem('right', 'x', 1)}
-                    disabled={gameState.solved || isTilting}
-                    className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 bg-blue-100 hover:bg-blue-200 text-blue-900 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px]"
-                    title="Sağ kefeye 1x sandığı koy"
-                  >
-                    📦 +1x
-                  </button>
-                  {[1, 2, 5].map(v => (
-                    <button
-                      key={v}
-                      type="button"
-                      onClick={() => handleAddItem('right', 'constant', v)}
-                      disabled={gameState.solved || isTilting}
-                      className="px-2.5 py-1 rounded-lg text-xs font-mono font-bold border-2 border-zinc-900 bg-amber-100 hover:bg-amber-200 text-amber-950 transition-all shadow-[1px_1px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px]"
-                      title={`Sağ kefeye +${v} pirinç ağırlık koy`}
-                    >
-                      ⚖️ +{v}
-                    </button>
-                  ))}
-                </div>
-              </div>
+            <div
+              onDragOver={e => { e.preventDefault(); setHoveredPan('right'); }}
+              onDragLeave={() => setHoveredPan(null)}
+              onDrop={e => { e.preventDefault(); handleDropOnPan('right'); }}
+              className={`p-3 rounded-xl border-2 transition-all flex flex-col items-center justify-center text-center cursor-pointer ${
+                hoveredPan === 'right'
+                  ? 'border-amber-600 bg-amber-50 ring-2 ring-amber-400'
+                  : 'border-zinc-300 bg-white hover:bg-zinc-50'
+              }`}
+            >
+              <span className="text-xs font-mono font-bold text-zinc-700">
+                📥 Sağ Kefeye Bırak (veya tıkla)
+              </span>
+              <span className="text-[11px] text-zinc-500 mt-0.5">
+                Mevcut: {playMode === 'equation' ? `${rightPanItems.length} nesne (${currentRightMass} br)` : `${freeRightItems.length} nesne (${freeScaleEval.rightMass} br)`}
+              </span>
             </div>
           </div>
 
-          {/* AKILLI HIZLI HAMLELER (En Heyecanlı Hızlı Aksiyon Çipleri) */}
+          {/* ======================= ALT AĞIRLIK TEPSİSİ (SÜRÜKLE-BIRAK VE TIKLAMA KAYNAĞI) ======================= */}
           <div className="mt-4 pt-3 border-t-2 border-dashed border-zinc-200">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-zinc-700 flex items-center gap-1.5 font-mono">
-                <span>⚡</span> Akıllı Denge Hamleleri:
+              <span className="text-xs font-mono font-bold uppercase text-zinc-600 flex items-center gap-1.5">
+                <span>🧰</span> Ağırlık Tepsisi:
               </span>
-              <span className="text-[11px] text-zinc-500 font-medium">Tek tıkla her iki kefeye uygula</span>
+              <span className="text-[11px] text-zinc-500 font-medium">
+                (Parçayı tut kefeye sürükle veya doğrudan seçerek ekle)
+              </span>
             </div>
 
-            {/* 3. Aşama: Katsayıya Bölme (Sadeleştirme) Öne Çıkan Kartı */}
-            {stageInfo.stage === 3 && recommendedOps.find(op => op.type === 'divide') && (
-              <div className="mb-3 p-3.5 rounded-xl border-2 border-blue-600 bg-blue-50/95 shadow-[3px_3px_0px_#2563eb]">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div className="text-xs">
-                    <div className="font-extrabold text-blue-950 font-mono flex items-center gap-1.5 text-sm">
-                      <span>✂️</span> 3. Aşama: Çözüm Kümesinin Elde Edilmesi (Sadeleştirme)
-                    </div>
-                    <div className="text-[11px] text-blue-900 mt-0.5">
-                      Bilinmeyenin katsayısını 1'e indirgemek için her iki kefedeki varlıkları katsayıya bölün!
-                    </div>
-                  </div>
-                  {(() => {
-                    const divOp = recommendedOps.find(op => op.type === 'divide')!;
-                    return (
-                      <button
-                        type="button"
-                        onClick={() => handleOperation('divide', divOp.value, false, 'left')}
-                        disabled={gameState.solved || isTilting}
-                        className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-mono font-bold text-xs shadow-[2px_2px_0px_#1e3a8a] active:translate-x-[1px] active:translate-y-[1px] flex items-center gap-1.5 animate-pulse"
-                      >
-                        <span>÷</span> Her İki Kefeyi {divOp.value}'ye Böl (1x'e Ulaş)
-                      </button>
-                    );
-                  })()}
-                </div>
-              </div>
-            )}
-
-            {stageInfo.isIsolated && stageInfo.isolatedValue !== undefined ? (
-              <button
-                type="button"
-                onClick={() => handleSolvedSuccess(stageInfo.isolatedValue!)}
-                disabled={gameState.solved || isTilting}
-                className="w-full py-3 px-4 rounded-xl font-bold bg-emerald-600 text-white border-2 border-zinc-900 shadow-[3px_3px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px] text-sm animate-pulse flex items-center justify-center gap-2 disabled:opacity-50"
+            <div className="flex items-center gap-3 overflow-x-auto pb-2">
+              {/* x Kutusu */}
+              <div
+                draggable
+                onDragStart={() => handleDragStart('x', 1)}
+                onClick={() => {
+                  if (playMode === 'free') {
+                    setFreeLeftItems(prev => [...prev, { id: `free-x-${Date.now()}`, type: 'x', value: 1, label: 'x' }]);
+                    playSound('click');
+                  }
+                }}
+                className="px-3.5 py-2.5 rounded-xl border-2 border-zinc-900 bg-blue-600 text-white font-mono font-black text-sm shadow-[2px_2px_0px_#18181b] cursor-grab active:cursor-grabbing hover:scale-105 transition-transform flex items-center gap-2"
+                title="Bilinmeyen x kutusu (Sürükle bırak)"
               >
-                <span>🎯</span> x = {stageInfo.isolatedValue} Tamamlandı! Teraziyi Onayla (Tam Puan)
-              </button>
-            ) : recommendedOps.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                {recommendedOps.map((op: QuickAction, idx) => {
-                  const triggerSide = op.label.includes('Sağ') ? 'right' : 'left';
-                  return (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => handleOperation(op.type, op.value, op.isVariable, triggerSide)}
-                      disabled={gameState.solved || isTilting}
-                      className="p-2.5 rounded-xl border-2 border-zinc-900 bg-white hover:bg-zinc-50 text-left transition-all shadow-[2px_2px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px] group disabled:opacity-50"
-                    >
-                      <div className="flex items-center justify-between gap-1 mb-1">
-                        <span className="font-mono font-extrabold text-xs px-2 py-0.5 rounded border border-zinc-900 bg-zinc-100 group-hover:bg-zinc-900 group-hover:text-white transition-colors">
-                          {op.badge}
-                        </span>
-                        <span className="text-[10px] text-zinc-500 font-bold uppercase">Her İki Kefeden</span>
-                      </div>
-                      <div className="text-xs font-bold text-zinc-900 truncate">{op.label}</div>
-                      <div className="text-[11px] text-zinc-500 truncate">{op.description}</div>
-                    </button>
-                  );
-                })}
+                <span>📦</span>
+                <span>x Kutusu</span>
               </div>
-            ) : (
-              <div className="text-xs text-zinc-500 font-mono text-center py-1">
-                Önerilen işlem yok. Manuel işlem yapabilir veya x değerini doğrudan girebilirsiniz.
-              </div>
-            )}
+
+              {/* Standart Pirinç Ağırlıklar: 1, 2, 3, 5, 10 */}
+              {[1, 2, 3, 5, 10].map(val => (
+                <div
+                  key={val}
+                  draggable
+                  onDragStart={() => handleDragStart('constant', val)}
+                  onClick={() => {
+                    if (playMode === 'free') {
+                      setFreeRightItems(prev => [...prev, { id: `free-c-${Date.now()}`, type: 'constant', value: val, label: `${val}` }]);
+                      playSound('click');
+                    }
+                  }}
+                  className="px-3.5 py-2 rounded-xl border-2 border-zinc-900 bg-amber-400 text-zinc-950 font-mono font-black text-sm shadow-[2px_2px_0px_#18181b] cursor-grab active:cursor-grabbing hover:scale-105 transition-transform flex items-center gap-1.5"
+                  title={`${val} birim pirinç ağırlık (Sürükle bırak)`}
+                >
+                  <span>⚖️</span>
+                  <span>{val} br</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        {/* Kontrol Alanı (Manuel İşlemler, Çözüm Testi ve Adım Geçmişi) */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {/* Sol Kolon: Doğrudan Cevap & Manuel İşlemler */}
-          <div className="space-y-4">
-            {/* Hızlı Çözüm Girişi */}
-            <div className="paper-card">
-              <h3 className="text-xs font-bold text-zinc-600 uppercase tracking-wider mb-2 font-mono">
-                Cevabı Biliyor musun? Doğrudan Gir:
-              </h3>
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  value={studentAnswer}
-                  onChange={e => setStudentAnswer(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleCheckAnswer()}
-                  placeholder="x = ?"
-                  className="flex-1 px-3 py-2 rounded-xl font-mono font-bold text-zinc-900 bg-white border-2 border-zinc-900 outline-none text-base"
-                  disabled={gameState.solved || (gameMode === 'rush' && isRushGameOver)}
-                />
+        {/* ======================= MOD B: ÖNERİLEN AKILLI HAMLELER VE İŞLEMLER ======================= */}
+        {playMode === 'equation' && (
+          <div className="paper-card space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="text-xs font-mono font-bold uppercase text-zinc-700 flex items-center gap-1.5">
+                <span>⚡</span> Denklik İlkesi Hamleleri (Her İki Kefeye Eşit İşlem):
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowSolutionSteps(!showSolutionSteps)}
+                className="text-xs font-mono font-bold text-blue-700 hover:underline"
+              >
+                {showSolutionSteps ? '🙈 Adımları Gizle' : '📖 Matematiksel Çözüm Adımları'}
+              </button>
+            </div>
+
+            {/* Önerilen Hızlı Butonlar */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
+              {recommendedOps.map((op: QuickAction, idx) => (
                 <button
+                  key={idx}
                   type="button"
-                  onClick={handleCheckAnswer}
-                  disabled={gameState.solved || !studentAnswer || (gameMode === 'rush' && isRushGameOver)}
-                  className="sketch-btn-dark px-5 text-sm font-bold"
+                  onClick={() => applyBalancedOperation(op.type, op.value, op.isVariable)}
+                  disabled={solved || isTilting}
+                  className="p-3 rounded-xl border-2 border-zinc-900 bg-white hover:bg-zinc-50 text-left transition-all shadow-[2px_2px_0px_#18181b] active:translate-x-[1px] active:translate-y-[1px] disabled:opacity-50 group"
                 >
-                  Doğrula ✓
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-mono font-extrabold text-xs px-2 py-0.5 rounded border border-zinc-900 bg-zinc-100 group-hover:bg-zinc-900 group-hover:text-white transition-colors">
+                      {op.badge}
+                    </span>
+                    <span className="text-[10px] text-zinc-500 font-bold uppercase font-mono">Her İki Tarafa</span>
+                  </div>
+                  <div className="text-xs font-bold text-zinc-900 truncate">{op.label}</div>
+                  <div className="text-[11px] text-zinc-500 truncate">{op.description}</div>
                 </button>
-              </div>
+              ))}
             </div>
 
-            {/* Manuel İşlem Akordeonu */}
-            <div className="paper-card">
+            {/* Doğrudan Sayısal Cevap Girişi */}
+            <div className="pt-3 border-t border-zinc-200 flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-mono font-bold text-zinc-600">x Değerini Biliyor musun?</span>
+              <input
+                type="number"
+                value={studentAnswer}
+                onChange={e => setStudentAnswer(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleCheckAnswer()}
+                placeholder="x = ?"
+                className="w-24 px-3 py-1.5 rounded-lg border-2 border-zinc-900 font-mono font-bold text-sm bg-white"
+                disabled={solved}
+              />
               <button
                 type="button"
-                onClick={() => setShowManualOps(!showManualOps)}
-                className="w-full flex items-center justify-between text-xs font-bold text-zinc-800 uppercase font-mono"
+                onClick={handleCheckAnswer}
+                disabled={solved || !studentAnswer}
+                className="sketch-btn-dark py-1.5 px-4 text-xs font-bold"
               >
-                <span>🛠️ Özel / Manuel İşlem Paneli</span>
-                <span>{showManualOps ? '▲ Gizle' : '▼ Aç'}</span>
+                Doğrula ✓
               </button>
-
-              {showManualOps && (
-                <div className="mt-3 pt-3 border-t-2 border-dashed border-zinc-200">
-                  <OperationPanel
-                    onApply={handleOperation}
-                    disabled={gameState.solved || (gameMode === 'rush' && isRushGameOver) || isTilting}
-                  />
-                </div>
-              )}
             </div>
           </div>
-
-          {/* Sağ Kolon: Adımlar, İpuçları ve Çözüm */}
-          <div className="space-y-4">
-            <div className="paper-card">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-zinc-500 font-mono">BAŞLANGIÇ:</span>
-                <span className="font-mono text-sm font-extrabold text-zinc-900">
-                  {equationToString(gameState.equation)}
-                </span>
-              </div>
-
-              {gameState.steps.length > 1 && (
-                <div className="mt-3 space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                  <div className="text-[11px] text-zinc-500 font-bold uppercase font-mono">Denklik Adımları:</div>
-                  {gameState.steps.map((step, i) => (
-                    <div
-                      key={i}
-                      className="text-xs font-mono px-2.5 py-1.5 rounded-lg border border-zinc-200 bg-zinc-50 flex items-center justify-between text-zinc-800"
-                    >
-                      <span className="text-zinc-500 font-bold">{i + 1}. Adım:</span>
-                      <span className="font-bold">{step}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* İpucu & Çözüm Butonları */}
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={handleHint}
-                disabled={gameState.solved || (gameMode === 'rush' && isRushGameOver)}
-                className="sketch-btn flex-1 text-xs font-bold"
-              >
-                💡 İpucu Al ({gameState.hintsUsed})
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowSolution(!showSolution)}
-                className="sketch-btn flex-1 text-xs font-bold"
-              >
-                {showSolution ? '🙈 Çözümü Gizle' : '📖 Adım Adım Çözüm'}
-              </button>
-            </div>
-
-            {/* Çözüm Çekmecesi */}
-            <AnimatePresence>
-              {showSolution && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                  className="rounded-xl overflow-hidden border-2 border-zinc-900 bg-zinc-50 p-4 shadow-[2px_2px_0px_#18181b]"
-                >
-                  <div className="text-xs font-bold text-zinc-900 uppercase tracking-wider mb-2 font-mono">
-                    Matematiksel Çözüm:
-                  </div>
-                  {generateSolutionSteps(gameState.equation).map((step, i) => (
-                    <div key={i} className="flex gap-2 text-xs mb-1.5">
-                      <span className="font-bold text-zinc-900">{i + 1}.</span>
-                      <div>
-                        <span className="text-zinc-700">{step.description}: </span>
-                        <span className="font-mono font-bold text-zinc-900">
-                          {step.leftSide} = {step.rightSide}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                  <div className="mt-2 pt-2 border-t border-zinc-300 text-xs font-bold text-emerald-700 font-mono">
-                    Doğru Çözüm: x = {fractionToString(solution)}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        </div>
-
-        {/* Geri Bildirim */}
-        <AnimatePresence>
-          {feedback && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className={
-                feedback.type === 'success'
-                  ? 'feedback-correct'
-                  : feedback.type === 'error'
-                  ? 'feedback-wrong'
-                  : feedback.type === 'hint'
-                  ? 'feedback-hint'
-                  : 'border-2 border-zinc-900 bg-white text-zinc-900 rounded-xl p-4 shadow-[2px_2px_0px_#18181b]'
-              }
-            >
-              {feedback.type === 'success' && '✅ '}
-              {feedback.type === 'error' && '❌ '}
-              {feedback.type === 'hint' && '💡 '}
-              {feedback.type === 'info' && 'ℹ️ '}
-              <span className="font-medium text-xs">{feedback.message}</span>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Rush Modu Oyun Sonu Ekranı */}
-        {gameMode === 'rush' && isRushGameOver && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="paper-card text-center py-6 border-2 border-rose-600 bg-rose-50/50 shadow-[4px_4px_0px_#e11d48]"
-          >
-            <div className="text-3xl mb-1">⏱️</div>
-            <h2 className="text-xl font-black text-rose-900 mb-1">Süre Bitti!</h2>
-            <p className="text-zinc-700 text-sm font-bold mb-3">
-              Toplam Çözülen: {problemsSolved} denklem | En Yüksek Skor: {highScore}
-            </p>
-            <button
-              type="button"
-              onClick={restartRush}
-              className="sketch-btn-dark px-6 py-2.5 text-sm font-bold"
-            >
-              🔄 Yeniden Dene
-            </button>
-          </motion.div>
         )}
 
-        {/* Başarı Durumu (Zen Modu veya Rush devam ederken) */}
+        {/* Adım Adım Çözüm Dökümü Çekmecesi */}
         <AnimatePresence>
-          {gameState.solved && !isRushGameOver && (
+          {showSolutionSteps && playMode === 'equation' && (
             <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="paper-card text-center py-6 border-2 border-emerald-600 bg-emerald-50/50 shadow-[4px_4px_0px_#059669]"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="paper-card !bg-zinc-50 space-y-2 font-mono text-xs"
             >
-              <div className="text-3xl mb-1">🎉</div>
-              <h2 className="text-xl font-black text-emerald-900 mb-1">Harika İş!</h2>
-              <p className="text-zinc-700 text-sm font-bold mb-3">
-                x = {fractionToString(solution)} bulundu! Puan: +{gameState.score}
-                {gameMode === 'rush' && streak > 1 && ` (+${streak * 15} kombo bonusu!)`}
-              </p>
-              <button
-                type="button"
-                onClick={startNewGame}
-                className="sketch-btn-dark px-6 py-2.5 text-sm font-bold"
-              >
-                Sonraki Denklem →
-              </button>
+              <div className="font-extrabold text-zinc-900 uppercase">Tam Matematiksel Çözüm İzlemi:</div>
+              {generateSolutionSteps(equation).map((st, i) => (
+                <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-white border border-zinc-200">
+                  <span className="text-zinc-600">{i + 1}. {st.description}</span>
+                  <span className="font-black text-zinc-900">{st.leftSide} = {st.rightSide}</span>
+                </div>
+              ))}
             </motion.div>
           )}
         </AnimatePresence>
-      </div>
+      </main>
+
+      {/* ======================= 3 AŞAMALI KADEMELİ İPUCU MODALI ======================= */}
+      <AnimatePresence>
+        {showHintModal && (
+          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="paper-card max-w-md w-full p-6 space-y-4"
+            >
+              <div className="flex items-center justify-between pb-2 border-b-2 border-zinc-200">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl">💡</span>
+                  <h3 className="font-mono font-extrabold text-sm uppercase text-zinc-900">
+                    {progressiveHintData.levelTitle}
+                  </h3>
+                </div>
+                <button onClick={() => setShowHintModal(false)} className="font-mono text-xs font-bold text-zinc-500 hover:text-zinc-900">
+                  ✕
+                </button>
+              </div>
+
+              {/* 1. Aşama: Düşündürücü Soru */}
+              <div className="p-3 rounded-xl border border-zinc-800 bg-amber-50">
+                <div className="text-[11px] font-mono font-bold text-amber-900 uppercase mb-1">
+                  ❓ Düşündürücü Soru:
+                </div>
+                <p className="text-xs font-medium text-zinc-800">{progressiveHintData.question}</p>
+              </div>
+
+              {/* 2. Aşama: Görsel Yönlendirme (Hint seviyesi >= 2 ise) */}
+              {hintLevel >= 2 && (
+                <div className="p-3 rounded-xl border border-blue-800 bg-blue-50">
+                  <div className="text-[11px] font-mono font-bold text-blue-900 uppercase mb-1">
+                    🔍 Görsel Yönlendirme:
+                  </div>
+                  <p className="text-xs font-medium text-zinc-800">{progressiveHintData.visualCue}</p>
+                </div>
+              )}
+
+              {/* 3. Aşama: Adım Adım Çözüm Desteği (Hint seviyesi >= 3 ise) */}
+              {hintLevel >= 3 && (
+                <div className="p-3 rounded-xl border border-emerald-800 bg-emerald-50">
+                  <div className="text-[11px] font-mono font-bold text-emerald-900 uppercase mb-1">
+                    🎯 Adım Adım Doğrudan İşlem:
+                  </div>
+                  <p className="text-xs font-bold text-emerald-950">{progressiveHintData.actionStep}</p>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                {hintLevel < 3 && (
+                  <button
+                    type="button"
+                    onClick={() => setHintLevel(l => l + 1)}
+                    className="sketch-btn flex-1 py-2 text-xs font-bold"
+                  >
+                    Daha Fazla İpucu ({hintLevel + 1}/3) →
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowHintModal(false)}
+                  className="sketch-btn-dark flex-1 py-2 text-xs font-bold"
+                >
+                  Anladım, Uygulayayım ✓
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ======================= KURALLAR VE PEDAGOJİK KILAVUZ MODALI ======================= */}
+      <AnimatePresence>
+        {showRulesModal && (
+          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="paper-card max-w-lg w-full p-6 space-y-3 font-mono text-xs"
+            >
+              <div className="flex justify-between items-center pb-2 border-b-2 border-zinc-200">
+                <h3 className="font-black text-sm text-zinc-900 flex items-center gap-2">
+                  <span>📖</span> Cebir Terazisi Pedagojik Kılavuzu:
+                </h3>
+                <button onClick={() => setShowRulesModal(false)} className="text-zinc-500 hover:text-zinc-900">
+                  ✕
+                </button>
+              </div>
+
+              <ul className="space-y-2 text-zinc-700">
+                <li>• <strong>Merkez Noktası (Mesnet):</strong> Terazinin denge noktası, matematikteki eşittir (=) işaretini temsil eder.</li>
+                <li>• <strong>Kefeler:</strong> Terazinin sol ve sağ kefeleri denklemin sol ve sağ taraflarını simgeler.</li>
+                <li>• <strong>Bilinmeyenler (x):</strong> Kütlesi başlangıçta gizli tutulan kutulardır.</li>
+                <li>• <strong>Denklik İlkesi:</strong> Terazi dengedeyken bir taraftan ağırlık alırsan terazi bozulur! Dengeyi korumak için aynı işlemi karşı kefeye de uygulamalısın.</li>
+                <li>• <strong>Çözüm Hedefi:</strong> Bir kefede yalnızca 1 adet x kutusu, karşı kefede ise sadece sayı kalsın: <code>x = ?</code></li>
+              </ul>
+
+              <div className="pt-2 text-right">
+                <button onClick={() => setShowRulesModal(false)} className="sketch-btn-dark px-4 py-2 font-bold text-xs">
+                  Kapat
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ======================= ÖĞRENME RAPORU VE KAVRAM ANALİTİĞİ MODALI ======================= */}
+      <AnimatePresence>
+        {showReportModal && (
+          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="paper-card max-w-md w-full p-6 space-y-4 font-mono text-xs"
+            >
+              <div className="flex justify-between items-center pb-2 border-b-2 border-zinc-200">
+                <h3 className="font-black text-sm text-zinc-900 flex items-center gap-2">
+                  <span>📊</span> Öğrenci Öğrenme & Kavram Raporu:
+                </h3>
+                <button onClick={() => setShowReportModal(false)} className="text-zinc-500 hover:text-zinc-900">
+                  ✕
+                </button>
+              </div>
+
+              {/* Temel Metrikler */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="p-2.5 rounded-lg border border-zinc-200 bg-zinc-50">
+                  <div className="text-zinc-500 text-[10px]">Çözülen Denklem:</div>
+                  <div className="text-base font-black text-zinc-900">{stats.tasksCompleted} Adet</div>
+                </div>
+                <div className="p-2.5 rounded-lg border border-zinc-200 bg-zinc-50">
+                  <div className="text-zinc-500 text-[10px]">Başarı Oranı:</div>
+                  <div className="text-base font-black text-emerald-700">
+                    %{stats.tasksCompleted > 0 ? Math.round((stats.correctAttempts / (stats.correctAttempts + stats.wrongAttempts || 1)) * 100) : 100}
+                  </div>
+                </div>
+              </div>
+
+              {/* Kavram Kazanımları */}
+              <div className="space-y-2">
+                <div className="text-[11px] font-bold text-zinc-600 uppercase">Öğrenilen Matematiksel Kavramlar:</div>
+                {[
+                  { name: 'Eşitlik ve Denge', score: concepts.equalityBalance, desc: 'Kefeler arasındaki denge mantığını kavrama' },
+                  { name: 'Bilinmeyenin İzolasyonu', score: concepts.isolation, desc: "x'i tek başına bırakma stratejisi" },
+                  { name: 'Denklik İlkesi', score: concepts.equivalencePrinciple, desc: 'İki tarafa da aynı işlemi uygulama' },
+                  { name: 'Ters İşlemler', score: concepts.inverseOperations, desc: 'Toplamayı çıkarma, çarpmayı bölme ile nötrleme' },
+                ].map((c, i) => (
+                  <div key={i} className="p-2 rounded-lg border border-zinc-200 flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-zinc-900">{c.name}</div>
+                      <div className="text-[10px] text-zinc-500">{c.desc}</div>
+                    </div>
+                    <span className="font-black text-emerald-700">✓ {c.score} Pratik</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="text-right pt-2">
+                <button onClick={() => setShowReportModal(false)} className="sketch-btn-dark px-4 py-2 font-bold text-xs">
+                  Raporu Kapat
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
